@@ -15,7 +15,7 @@
 
 ## Unreleased
 
-- 新增 GitHub Actions 自动测试、多架构镜像构建和 GHCR 发布。
+- 新增 GitHub Actions 自动测试、`linux/amd64` 镜像构建和 GHCR 发布。
 - 新增 `docker-compose.release.yml`，支持无源码直接拉取镜像运行。
 
 ## v0.2.0 - 2026-11-17

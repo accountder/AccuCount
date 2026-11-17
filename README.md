@@ -239,10 +239,9 @@ GitHub Actions 工作流：
 ghcr.io/accountder/accucount
 ```
 
-构建前会自动运行会计引擎测试和前端生产构建。发布镜像同时支持：
+构建前会自动运行会计引擎测试和前端生产构建。当前发布镜像目标架构：
 
 - `linux/amd64`
-- `linux/arm64`
 
 ### 从源码部署
 
