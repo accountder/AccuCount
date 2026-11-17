@@ -155,6 +155,18 @@ docker compose up -d --build      # 默认映射 8070:8090
 管理员可在右上角账号菜单直接下载一致性备份 ZIP。日常仍建议保留整个 `data` 目录的定时快照。
 若通过局域网或公网访问，请在容器前增加 HTTPS 反向代理，并限制可访问网段。
 
+### DSM（内网）
+
+DSM 专用 Compose 位于 `deploy/dsm/docker-compose.yml`，保留旧版数据目录
+`/volume1/docker/cnerp/data` 并使用容器名 `accucount`、镜像 `accucount:0.2`。
+
+升级原则：
+
+1. 先做在线 SQLite 一致性备份并验证 `PRAGMA integrity_check`；
+2. 保留旧镜像 `cnerp:0.1` 和旧 Compose，便于回滚；
+3. 使用 `docker compose up -d --remove-orphans` 原位替换，不对数据目录做搬迁或删除；
+4. 以容器健康检查、数据库完整性和登录页面三层验证结果为准。
+
 ## 七、自测
 
 ```bash

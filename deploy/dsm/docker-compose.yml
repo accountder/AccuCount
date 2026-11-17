@@ -1,0 +1,22 @@
+# AccuCount DSM 部署（Synology Container Manager）
+# 保留 Compose 项目名 cnerp 与旧数据目录，确保原位升级不搬迁账套。
+name: cnerp
+
+services:
+  accucount:
+    image: accucount:0.2
+    container_name: accucount
+    ports:
+      - "8070:8090"
+    volumes:
+      - "/volume1/docker/cnerp/data:/data"
+    environment:
+      TZ: "Asia/Shanghai"
+      ACCUCOUNT_DATA: "/data"
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8090/api/health', timeout=3)"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 20s
