@@ -1,8 +1,8 @@
 import React, { useContext, useEffect, useMemo, useState } from 'react'
 import {
-  Button, Card, Form, Input, Modal, Select, Space, Switch, Table, Tag, Tooltip, App as AntApp,
+  App as AntApp, Button, Card, Dropdown, Form, Input, Modal, Select, Space, Switch, Table, Tag,
 } from 'antd'
-import { PlusOutlined, ReloadOutlined } from '@ant-design/icons'
+import { MoreOutlined, PlusOutlined, ReloadOutlined, SearchOutlined } from '@ant-design/icons'
 import { api, errMsg } from '../api'
 import { AppCtx } from '../context'
 
@@ -21,6 +21,9 @@ export default function Accounts() {
   const [loading, setLoading] = useState(false)
   const [open, setOpen] = useState(false)
   const [editing, setEditing] = useState(null)
+  const [q, setQ] = useState('')
+  const [catFilter, setCatFilter] = useState()
+  const [onlyEnabled, setOnlyEnabled] = useState(false)
   const [form] = Form.useForm()
   const { readOnly } = useContext(AppCtx)
   const { message } = AntApp.useApp()
@@ -40,9 +43,30 @@ export default function Accounts() {
     load()
   }, [])
 
+  const filteredRows = useMemo(() => {
+    const keyword = q.trim().toLowerCase()
+    const direct = rows.filter((r) => {
+      if (catFilter && r.cat !== catFilter) return false
+      if (onlyEnabled && !r.enabled) return false
+      if (!keyword) return true
+      return `${r.code} ${r.name}`.toLowerCase().includes(keyword)
+    })
+    if (!keyword) return direct
+    const byId = new Map(rows.map((r) => [r.id, r]))
+    const include = new Set(direct.map((r) => r.id))
+    direct.forEach((r) => {
+      let parentId = r.parent_id
+      while (parentId && byId.has(parentId)) {
+        include.add(parentId)
+        parentId = byId.get(parentId).parent_id
+      }
+    })
+    return rows.filter((r) => include.has(r.id))
+  }, [rows, q, catFilter, onlyEnabled])
+
   const tree = useMemo(() => {
     const map = new Map()
-    rows.forEach((r) => map.set(r.id, { ...r, children: [] }))
+    filteredRows.forEach((r) => map.set(r.id, { ...r, children: [] }))
     const roots = []
     map.forEach((r) => {
       if (r.parent_id && map.has(r.parent_id)) map.get(r.parent_id).children.push(r)
@@ -54,7 +78,7 @@ export default function Accounts() {
     }
     sortRec(roots)
     return roots
-  }, [rows])
+  }, [filteredRows])
 
   const openNew = (record) => {
     setEditing(null)
@@ -184,25 +208,34 @@ export default function Accounts() {
         v ? <Tag color="green">启用</Tag> : <Tag color="default">停用</Tag>,
     },
     {
-      title: '操作',
-      width: 170,
+      title: '',
+      width: 64,
+      fixed: 'right',
+      align: 'right',
       render: (_, r) => (
-        <Space size={4}>
-          <Button type="link" size="small" onClick={() => openNew(r)}>
-            加下级
-          </Button>
-          <Button type="link" size="small" onClick={() => openEdit(r)}>
-            编辑
-          </Button>
-          <Button type="link" size="small" danger onClick={() => remove(r)}>
-            删除
-          </Button>
-        </Space>
+        <Dropdown
+          trigger={['click']}
+          menu={{
+            items: [
+              { key: 'child', label: '新增下级' },
+              { key: 'edit', label: '编辑科目' },
+              { type: 'divider' },
+              { key: 'delete', label: '删除科目', danger: true },
+            ],
+            onClick: ({ key }) => {
+              if (key === 'child') openNew(r)
+              if (key === 'edit') openEdit(r)
+              if (key === 'delete') remove(r)
+            },
+          }}
+        >
+          <Button type="text" size="small" icon={<MoreOutlined />} />
+        </Dropdown>
       ),
     },
   ]
 
-  const visibleColumns = readOnly ? columns.filter((c) => c.title !== '操作') : columns
+  const visibleColumns = readOnly ? columns.slice(0, -1) : columns
 
   return (
     <div>
@@ -225,16 +258,38 @@ export default function Accounts() {
         </Space>
       </div>
 
+      <div className="accounts-toolbar">
+        <Input
+          allowClear
+          prefix={<SearchOutlined />}
+          placeholder="搜索科目编码或名称"
+          value={q}
+          onChange={(e) => setQ(e.target.value)}
+        />
+        <Select
+          allowClear
+          placeholder="全部类别"
+          value={catFilter}
+          onChange={setCatFilter}
+          style={{ width: 124 }}
+          options={Object.entries(CAT).map(([value, item]) => ({ value, label: item.label }))}
+        />
+        <span style={{ marginLeft: 'auto', display: 'inline-flex', alignItems: 'center', gap: 8 }}>
+          <span className="soft-text" style={{ fontSize: 11.5 }}>只看启用</span>
+          <Switch size="small" checked={onlyEnabled} onChange={setOnlyEnabled} />
+          <span className="soft-text" style={{ fontSize: 11.5 }}>显示 {filteredRows.length} 个</span>
+        </span>
+      </div>
+
       <Card size="small" bordered={false}>
         <Table
           rowKey="id"
-          size="small"
           loading={loading}
           columns={visibleColumns}
           dataSource={tree}
           pagination={false}
           expandable={{ defaultExpandAllRows: true, indentSize: 16 }}
-          scroll={{ y: 'calc(100vh - 260px)' }}
+          scroll={{ y: 'calc(100vh - 320px)', x: 900 }}
         />
       </Card>
 

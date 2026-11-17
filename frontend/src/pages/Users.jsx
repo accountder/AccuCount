@@ -103,6 +103,7 @@ export default function Users() {
         loading={loading}
         dataSource={rows}
         pagination={false}
+        scroll={{ x: 820 }}
         columns={[
           { title: '用户名', dataIndex: 'username', width: 160 },
           { title: '姓名', dataIndex: 'name', width: 140, render: (v) => v || '—' },
@@ -119,15 +120,20 @@ export default function Users() {
             render: (v) => v ? <Tag color="green">启用</Tag> : <Tag>停用</Tag>,
           },
           {
-            title: '操作', width: 180,
+            title: '操作', width: 250, fixed: 'right',
             render: (_, r) => (
-              <Space size="middle">
-                <a onClick={() => openEdit(r)}>编辑</a>
+              <Space size={10} wrap={false}>
+                <Button type="link" size="small" onClick={() => openEdit(r)}>编辑</Button>
                 {r.id !== currentUser?.id ? (
-                  <a onClick={() => { setResetting(r); pwForm.resetFields() }}>
-                    <KeyOutlined /> 重置密码
-                  </a>
-                ) : <span style={{ color: '#9ca3af' }}>本人密码请右上角修改</span>}
+                  <Button
+                    type="link"
+                    size="small"
+                    icon={<KeyOutlined />}
+                    onClick={() => { setResetting(r); pwForm.resetFields() }}
+                  >
+                    重置密码
+                  </Button>
+                ) : <span className="user-action-text">在右上角修改</span>}
               </Space>
             ),
           },

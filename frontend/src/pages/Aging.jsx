@@ -305,6 +305,7 @@ export default function Aging() {
                         pagination={false}
                         dataSource={g.items}
                         columns={ledgerCols}
+                        scroll={{ x: 900 }}
                         style={{ margin: '-8px 0' }}
                       />
                     ),

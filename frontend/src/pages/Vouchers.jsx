@@ -5,7 +5,7 @@ import {
 } from 'antd'
 import {
   CheckCircleOutlined, CopyOutlined, DeleteOutlined, DownOutlined, ExportOutlined,
-  OrderedListOutlined, PlusOutlined, ReloadOutlined,
+  MoreOutlined, OrderedListOutlined, PlusOutlined, ReloadOutlined,
 } from '@ant-design/icons'
 import { useNavigate } from 'react-router-dom'
 import { api, errMsg, fmt } from '../api'
@@ -18,7 +18,7 @@ const STATUS = {
   void: { label: '作废', color: 'red' },
 }
 
-const EXPAND_KEY = 'cnerp_expand_lines'
+const EXPAND_KEY = 'accucount_expand_lines_v2'
 
 /** 生成 CSV 并触发下载。加 BOM 让 Excel 正确识别 UTF-8 中文。 */
 function downloadCsv(filename, rows) {
@@ -360,6 +360,26 @@ export default function Vouchers() {
     }
   }
 
+  const actionMenuFor = (r, editable, closed) => {
+    const items = []
+    if (!closed && r.status === 'audited') items.push({ key: 'unaudit', label: '反审核' })
+    if (!closed && r.status !== 'void') items.push({ key: 'insert', label: '插入凭证' })
+    if (!editable) items.push({ key: 'copy', label: '复制凭证' })
+    if (!closed && (r.status === 'draft' || r.status === 'void')) {
+      if (items.length) items.push({ type: 'divider' })
+      items.push({ key: 'delete', label: '删除凭证', danger: true })
+    }
+    return {
+      items,
+      onClick: ({ key }) => {
+        if (key === 'unaudit') act(r.id, 'unaudit', '已反审核')
+        if (key === 'insert') nav(`/vouchers/new?after=${r.id}`)
+        if (key === 'copy') doCopy(r)
+        if (key === 'delete') del(r)
+      },
+    }
+  }
+
   const columns = [
     {
       title: '日期',
@@ -407,50 +427,40 @@ export default function Vouchers() {
       render: (v) => <Tag color={STATUS[v]?.color}>{STATUS[v]?.label || v}</Tag>,
     },
     {
-      title: '操作',
-      width: 196,
+      title: '',
+      width: 142,
       fixed: 'right',
+      align: 'right',
       render: (_, r) => {
         const closed = isClosed(r.period)
         const editable = !closed && r.status === 'draft'
-        const b = []
-        b.push(
-          <a key="v" onClick={() => nav(`/vouchers/${r.id}`)}>
-            {editable ? '修改' : '查看'}
-          </a>,
+        const menu = actionMenuFor(r, editable, closed)
+        return (
+          <Space size={10} wrap={false}>
+            <a onClick={() => nav(`/vouchers/${r.id}`)}>{editable ? '修改' : '查看'}</a>
+            {!closed && r.status === 'draft' ? (
+              <a onClick={() => act(r.id, 'audit', '已审核')}>审核</a>
+            ) : null}
+            {!closed && r.status === 'audited' ? (
+              <a onClick={() => act(r.id, 'post', '已记账')}>记账</a>
+            ) : null}
+            {menu.items.length ? (
+              <Dropdown menu={menu} trigger={['click']} placement="bottomRight">
+                <Button type="text" size="small" icon={<MoreOutlined />} />
+              </Dropdown>
+            ) : null}
+            {closed ? (
+              <Tooltip title={`${r.period} 已结账，凭证锁定`}>
+                <span style={{ color: '#98a2b3', fontSize: 12 }}>🔒</span>
+              </Tooltip>
+            ) : null}
+          </Space>
         )
-        if (!closed && r.status === 'draft')
-          b.push(<a key="a" onClick={() => act(r.id, 'audit', '已审核')}>审核</a>)
-        if (!closed && r.status === 'audited')
-          b.push(
-            <a key="p" onClick={() => act(r.id, 'post', '已记账')}>记账</a>,
-            <a key="u" onClick={() => act(r.id, 'unaudit', '已反审核')}>反审核</a>,
-          )
-        if (!closed && r.status !== 'void')
-          b.push(
-            <Tooltip key="i" title="在这张之后插入一张新凭证，后面的凭证号顺移">
-              <a onClick={() => nav(`/vouchers/new?after=${r.id}`)}>插入</a>
-            </Tooltip>,
-          )
-        if (!editable) b.push(<a key="c" onClick={() => doCopy(r)}>复制</a>)
-        if (!closed && (r.status === 'draft' || r.status === 'void'))
-          b.push(
-            <a key="d" style={{ color: '#c0392b' }} onClick={() => del(r)}>
-              删除
-            </a>,
-          )
-        if (closed)
-          b.push(
-            <Tooltip key="lock" title={`${r.period} 已结账，凭证锁定`}>
-              <span style={{ fontSize: 11 }}>🔒</span>
-            </Tooltip>,
-          )
-        return <Space size={9} wrap>{b}</Space>
       },
     },
   ]
 
-  const visibleColumns = readOnly ? columns.filter((c) => c.title !== '操作') : columns
+  const visibleColumns = readOnly ? columns.slice(0, -1) : columns
   const canBatchAudit = selected.length > 0
   const allExpanded = expandAll
 
@@ -582,6 +592,7 @@ export default function Vouchers() {
           loading={loading}
           columns={visibleColumns}
           dataSource={rows}
+          scroll={{ x: 980 }}
           rowSelection={readOnly ? undefined : { selectedRowKeys: selected, onChange: setSelected }}
           expandable={{
             expandedRowKeys: allExpanded ? rows.map((r) => r.id) : expandedKeys,

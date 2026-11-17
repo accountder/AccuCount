@@ -165,7 +165,7 @@ export default function Partners() {
           columns={visibleColumns}
           dataSource={rows}
           pagination={{ pageSize: 30, size: 'small', showTotal: (t) => `共 ${t} 家` }}
-          scroll={{ y: 'calc(100vh - 340px)' }}
+          scroll={{ x: 920, y: 'calc(100vh - 340px)' }}
         />
       </Card>
 

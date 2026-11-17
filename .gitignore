@@ -22,3 +22,7 @@ backend/.tmp-*
 .tmp-browser/
 deploy.tgz
 deploy.b64
+
+# Local agent tooling
+.agents/
+skills-lock.json

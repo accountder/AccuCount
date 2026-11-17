@@ -36,10 +36,10 @@ admin / admin123
 
 ```bash
 # Linux / macOS
-ACCUCOUNT_VERSION=0.2.0 docker compose -f docker-compose.release.yml up -d
+ACCUCOUNT_VERSION=0.2.1 docker compose -f docker-compose.release.yml up -d
 
 # Windows PowerShell
-$env:ACCUCOUNT_VERSION="0.2.0"
+$env:ACCUCOUNT_VERSION="0.2.1"
 docker compose -f docker-compose.release.yml up -d
 ```
 
@@ -182,13 +182,13 @@ docker compose -f docker-compose.release.yml up -d
 
 ```text
 ghcr.io/accountder/accucount:latest
-ghcr.io/accountder/accucount:0.2.0
+ghcr.io/accountder/accucount:0.2.1
 ```
 
 指定版本时设置 `ACCUCOUNT_VERSION`（Linux/macOS）：
 
 ```bash
-ACCUCOUNT_VERSION=0.2.0 docker compose -f docker-compose.release.yml up -d
+ACCUCOUNT_VERSION=0.2.1 docker compose -f docker-compose.release.yml up -d
 ```
 
 数据保存在当前目录的 `data/` 中。
@@ -263,7 +263,7 @@ docker compose -f docker-compose.yml up -d --build      # 默认映射 8070:8090
 ### DSM（内网）
 
 DSM 专用 Compose 位于 `deploy/dsm/docker-compose.yml`，保留旧版数据目录
-`/volume1/docker/cnerp/data` 并使用容器名 `accucount`、镜像 `accucount:0.2`。
+`/volume1/docker/cnerp/data` 并使用容器名 `accucount`、镜像 `accucount:0.2.1`。
 
 升级原则：
 
@@ -291,9 +291,9 @@ python verify_live.py http://192.168.5.189:8070   # 只读核对线上数据
 Kiri Docker 验证流程：
 
 ```bash
-docker --context kiri build -t accucount:0.2-test .
+docker --context kiri build -t accucount:0.2.1-test .
 docker --context kiri run -d --rm --name accucount-test \
-  --tmpfs /data:rw,size=64m -p 18093:8090 -e ACCUCOUNT_DATA=/data accucount:0.2-test
+  --tmpfs /data:rw,size=64m -p 18093:8090 -e ACCUCOUNT_DATA=/data accucount:0.2.1-test
 docker --context kiri cp backend/test_auth_users_http.py accucount-test:/app/backend/
 docker --context kiri exec accucount-test python test_auth_users_http.py http://127.0.0.1:8090
 ```

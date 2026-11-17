@@ -116,7 +116,14 @@ export default function Periods() {
       />
 
       <Card size="small" bordered={false}>
-        <Table rowKey="code" size="small" loading={loading} columns={columns} dataSource={rows} pagination={false} />
+        <Table
+          rowKey="code"
+          loading={loading}
+          columns={columns}
+          dataSource={rows}
+          pagination={false}
+          scroll={{ x: 760 }}
+        />
       </Card>
     </div>
   )

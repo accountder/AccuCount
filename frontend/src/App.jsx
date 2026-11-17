@@ -1,6 +1,19 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react'
 import { BrowserRouter, Navigate, Route, Routes, useLocation, useNavigate } from 'react-router-dom'
-import { Alert, Avatar, Dropdown, Empty, Layout, Menu, Select, Spin, Tag, App as AntApp } from 'antd'
+import {
+  App as AntApp,
+  Avatar,
+  Button,
+  Drawer,
+  Dropdown,
+  Empty,
+  Grid,
+  Layout,
+  Menu,
+  Select,
+  Spin,
+  Tag,
+} from 'antd'
 import {
   AccountBookOutlined,
   AuditOutlined,
@@ -9,8 +22,12 @@ import {
   DashboardOutlined,
   DatabaseOutlined,
   FileTextOutlined,
+  InfoCircleOutlined,
   KeyOutlined,
   LogoutOutlined,
+  MenuFoldOutlined,
+  MenuOutlined,
+  MenuUnfoldOutlined,
   PercentageOutlined,
   ProfileOutlined,
   SettingOutlined,
@@ -40,27 +57,54 @@ import AuditLogs from './pages/AuditLogs'
 
 const { Header, Sider, Content } = Layout
 
+
 const BASE_MENU = [
-  { key: '/', icon: <DashboardOutlined />, label: '概览' },
-  { key: '/vouchers', icon: <FileTextOutlined />, label: '凭证' },
-  { key: '/accounts', icon: <UnorderedListOutlined />, label: '科目表' },
-  { type: 'divider' },
-  { key: '/partners', icon: <TeamOutlined />, label: '往来单位' },
-  { key: '/aging', icon: <ClockCircleOutlined />, label: '账龄分析' },
-  { key: '/assets', icon: <ProfileOutlined />, label: '固定资产' },
-  { key: '/vat', icon: <PercentageOutlined />, label: '增值税' },
-  { type: 'divider' },
-  { key: '/reports/tb', icon: <AccountBookOutlined />, label: '科目余额表' },
-  { key: '/reports/bs', icon: <BarChartOutlined />, label: '资产负债表' },
-  { key: '/reports/pl', icon: <BarChartOutlined />, label: '利润表' },
-  { type: 'divider' },
-  { key: '/periods', icon: <SettingOutlined />, label: '期末处理' },
+  {
+    type: 'group',
+    label: '工作台',
+    children: [
+      { key: '/', icon: <DashboardOutlined />, label: '概览' },
+      { key: '/vouchers', icon: <FileTextOutlined />, label: '凭证' },
+    ],
+  },
+  {
+    type: 'group',
+    label: '业务核算',
+    children: [
+      { key: '/partners', icon: <TeamOutlined />, label: '往来单位' },
+      { key: '/aging', icon: <ClockCircleOutlined />, label: '账龄分析' },
+      { key: '/assets', icon: <ProfileOutlined />, label: '固定资产' },
+      { key: '/vat', icon: <PercentageOutlined />, label: '增值税' },
+    ],
+  },
+  {
+    type: 'group',
+    label: '账簿与报表',
+    children: [
+      { key: '/accounts', icon: <UnorderedListOutlined />, label: '科目表' },
+      { key: '/reports/tb', icon: <AccountBookOutlined />, label: '科目余额表' },
+      { key: '/reports/bs', icon: <BarChartOutlined />, label: '资产负债表' },
+      { key: '/reports/pl', icon: <BarChartOutlined />, label: '利润表' },
+    ],
+  },
+  {
+    type: 'group',
+    label: '期末与系统',
+    children: [
+      { key: '/periods', icon: <SettingOutlined />, label: '期末处理' },
+    ],
+  },
 ]
 
 const ADMIN_MENU = [
-  { type: 'divider' },
-  { key: '/users', icon: <UserOutlined />, label: '账号与权限' },
-  { key: '/audit-logs', icon: <AuditOutlined />, label: '操作日志' },
+  {
+    type: 'group',
+    label: '系统管理',
+    children: [
+      { key: '/users', icon: <UserOutlined />, label: '账号与权限' },
+      { key: '/audit-logs', icon: <AuditOutlined />, label: '操作日志' },
+    ],
+  },
 ]
 
 const ROLE_TAG = {
@@ -77,11 +121,55 @@ function pickDefaultPeriod(meta) {
   return past.length ? past[past.length - 1] : open[0]
 }
 
+function Brand({ collapsed = false, onClose }) {
+  return (
+    <div className={`brand ${collapsed ? 'is-collapsed' : ''}`}>
+      <div className="brand-mark"><AccountBookOutlined /></div>
+      {!collapsed ? (
+        <div className="brand-copy">
+          <strong>AccuCount</strong>
+          <span>财务工作台</span>
+        </div>
+      ) : null}
+      {onClose ? (
+        <Button className="drawer-close" type="text" icon={<MenuFoldOutlined />} onClick={onClose} />
+      ) : null}
+    </div>
+  )
+}
+
+function SideNav({ menuItems, selected, collapsed = false, onNavigate, onClose }) {
+  return (
+    <div className="side-nav">
+      <Brand collapsed={collapsed} onClose={onClose} />
+      <Menu
+        className="app-menu"
+        mode="inline"
+        theme="light"
+        selectedKeys={[selected]}
+        items={menuItems}
+        inlineCollapsed={collapsed}
+        onClick={onNavigate}
+      />
+      {!collapsed ? (
+        <div className="side-footer">
+          <span>小企业会计准则</span>
+          <span>v0.2.1</span>
+        </div>
+      ) : null}
+    </div>
+  )
+}
+
 function Shell({ meta, reloadMeta, user, onLogout, onUserUpdated }) {
   const nav = useNavigate()
   const loc = useLocation()
+  const screens = Grid.useBreakpoint()
   const { message } = AntApp.useApp()
   const [pwOpen, setPwOpen] = useState(false)
+  const [collapsed, setCollapsed] = useState(false)
+  const [drawerOpen, setDrawerOpen] = useState(false)
+  const isMobile = screens.lg === false
 
   const menuItems = useMemo(
     () => (user?.role === 'admin' ? [...BASE_MENU, ...ADMIN_MENU] : BASE_MENU),
@@ -98,6 +186,15 @@ function Shell({ meta, reloadMeta, user, onLogout, onUserUpdated }) {
     localStorage.setItem('accucount_period', period)
   }, [period])
 
+  useEffect(() => {
+    setDrawerOpen(false)
+  }, [loc.pathname])
+
+  useEffect(() => {
+    if (screens.xl === false) setCollapsed(true)
+    if (screens.xl === true) setCollapsed(false)
+  }, [screens.xl])
+
   const ctx = useMemo(
     () => ({
       meta,
@@ -113,12 +210,21 @@ function Shell({ meta, reloadMeta, user, onLogout, onUserUpdated }) {
 
   const selected = useMemo(() => {
     if (loc.pathname === '/') return '/'
-    const hit = menuItems.filter((m) => m.key && m.key !== '/' && loc.pathname.startsWith(m.key))
-    return hit.length ? hit[hit.length - 1].key : '/'
+    const keys = menuItems
+      .flatMap((g) => g.children || [])
+      .map((item) => item.key)
+      .filter(Boolean)
+      .sort((a, b) => b.length - a.length)
+    return keys.find((key) => loc.pathname.startsWith(key)) || '/'
   }, [loc.pathname, menuItems])
 
   const cur = meta.periods.find((p) => p.code === period)
   const role = ROLE_TAG[user?.role] || { color: 'default', label: user?.role || '用户' }
+
+  const onNavigate = ({ key }) => {
+    nav(key)
+    setDrawerOpen(false)
+  }
 
   const onAccountMenu = async ({ key }) => {
     if (key === 'logout') return onLogout()
@@ -139,65 +245,60 @@ function Shell({ meta, reloadMeta, user, onLogout, onUserUpdated }) {
 
   return (
     <AppCtx.Provider value={ctx}>
-      <Layout style={{ minHeight: '100vh' }}>
-        <Sider width={198} style={{ background: '#0f2f66' }}>
-          <div className="sider-brand">
-            <AccountBookOutlined />
-            AccuCount
-          </div>
-          <Menu
-            theme="dark"
-            mode="inline"
-            selectedKeys={[selected]}
-            items={menuItems}
-            onClick={({ key }) => nav(key)}
-            style={{ background: 'transparent', marginTop: 8, fontSize: 13 }}
-          />
-          <div className="sider-foot">AccuCount · 小企业会计准则 · v0.2</div>
-        </Sider>
-
-        <Layout>
-          <Header
-            style={{
-              background: '#fff',
-              height: 56,
-              lineHeight: '56px',
-              padding: '0 20px',
-              display: 'flex',
-              alignItems: 'center',
-              gap: 16,
-              borderBottom: '1px solid #e5e7eb',
-            }}
+      <Layout className="app-layout">
+        {!isMobile ? (
+          <Sider
+            className="app-sider"
+            width={236}
+            collapsedWidth={76}
+            collapsed={collapsed}
+            trigger={null}
           >
-            <div style={{ fontWeight: 600 }}>{meta.company?.name || '未建账'}</div>
-            {meta.company?.tax_no ? (
-              <span style={{ color: '#9ca3af', fontSize: 12 }}>
-                纳税人识别号 {meta.company.tax_no}
-              </span>
-            ) : null}
-            <div style={{ marginLeft: 'auto', display: 'flex', alignItems: 'center', gap: 12 }}>
-              <span style={{ fontSize: 12, color: '#6b7280' }}>会计期间</span>
-              <Select
-                size="small"
-                style={{ width: 132 }}
-                value={period}
-                onChange={setPeriod}
-                options={meta.periods.map((p) => ({
-                  value: p.code,
-                  label: (
-                    <span>
-                      {p.code}
-                      {p.status === 'closed' ? (
-                        <Tag color="default" style={{ marginLeft: 6, transform: 'scale(0.85)' }}>
-                          已结
-                        </Tag>
-                      ) : null}
-                    </span>
-                  ),
-                }))}
+            <SideNav
+              menuItems={menuItems}
+              selected={selected}
+              collapsed={collapsed}
+              onNavigate={onNavigate}
+            />
+          </Sider>
+        ) : null}
+
+        <Layout className="app-main">
+          <Header className="app-header">
+            <div className="header-left">
+              <Button
+                className="header-icon-button"
+                type="text"
+                icon={isMobile ? <MenuOutlined /> : (collapsed ? <MenuUnfoldOutlined /> : <MenuFoldOutlined />)}
+                onClick={() => (isMobile ? setDrawerOpen(true) : setCollapsed((v) => !v))}
               />
-              {cur?.status === 'closed' ? <Tag color="orange">本期已结账</Tag> : null}
+              <div className="company-block">
+                <strong>{meta.company?.name || '未建账'}</strong>
+                <span className="company-tax">{meta.company?.standard || '财务核算'}{meta.company?.tax_no ? ` · ${meta.company.tax_no}` : ''}</span>
+              </div>
+            </div>
+
+            <div className="header-actions">
+              <div className="period-control">
+                <span>会计期间</span>
+                <Select
+                  value={period}
+                  onChange={setPeriod}
+                  popupMatchSelectWidth={false}
+                  options={meta.periods.map((p) => ({
+                    value: p.code,
+                    label: (
+                      <span className="period-option">
+                        {p.code}
+                        {p.status === 'closed' ? <Tag>已结</Tag> : null}
+                      </span>
+                    ),
+                  }))}
+                />
+              </div>
+              {cur?.status === 'closed' ? <Tag color="orange" className="header-status">本期已结账</Tag> : null}
               <Dropdown
+                placement="bottomRight"
                 menu={{
                   items: [
                     { key: 'password', icon: <KeyOutlined />, label: '修改密码' },
@@ -210,47 +311,67 @@ function Shell({ meta, reloadMeta, user, onLogout, onUserUpdated }) {
                   onClick: onAccountMenu,
                 }}
               >
-                <span style={{ cursor: 'pointer', display: 'flex', alignItems: 'center', gap: 8 }}>
-                  <Avatar size={26} style={{ background: '#1b57b0' }}>
+                <button type="button" className="user-chip">
+                  <Avatar size={30} style={{ background: '#1f4f7a' }}>
                     {(user?.name || user?.username || 'U').slice(0, 1)}
                   </Avatar>
-                  <span style={{ fontSize: 13 }}>{user?.name || user?.username}</span>
-                  <Tag color={role.color} style={{ marginInlineEnd: 0 }}>{role.label}</Tag>
-                </span>
+                  <span className="user-copy">
+                    <strong>{user?.name || user?.username}</strong>
+                    <span>@{user?.username}</span>
+                  </span>
+                  <Tag color={role.color}>{role.label}</Tag>
+                </button>
               </Dropdown>
             </div>
           </Header>
 
-          <Content style={{ padding: 16 }}>
-            {user?.role === 'viewer' ? (
-              <Alert
-                banner
-                showIcon
-                type="info"
-                message="当前为只读账号：可以查看凭证、账簿和报表，所有写入操作都会被系统拒绝。"
-                style={{ marginBottom: 12 }}
-              />
-            ) : null}
-            <Routes>
-              <Route path="/" element={<Dashboard />} />
-              <Route path="/vouchers" element={<Vouchers />} />
-              <Route path="/vouchers/new" element={user?.role === 'viewer' ? <Navigate to="/vouchers" replace /> : <VoucherEdit />} />
-              <Route path="/vouchers/:id" element={<VoucherEdit />} />
-              <Route path="/accounts" element={<Accounts />} />
-              <Route path="/partners" element={<Partners />} />
-              <Route path="/aging" element={<Aging />} />
-              <Route path="/assets" element={<Assets />} />
-              <Route path="/vat" element={<Vat />} />
-              <Route path="/reports/tb" element={<TrialBalance />} />
-              <Route path="/reports/bs" element={<BalanceSheet />} />
-              <Route path="/reports/pl" element={<Profit />} />
-              <Route path="/periods" element={<Periods />} />
-              <Route path="/users" element={user?.role === 'admin' ? <Users /> : <Navigate to="/" replace />} />
-              <Route path="/audit-logs" element={user?.role === 'admin' ? <AuditLogs /> : <Navigate to="/" replace />} />
-              <Route path="*" element={<Navigate to="/" replace />} />
-            </Routes>
+          <Content className="app-content">
+            <div className="page-container">
+              {user?.role === 'viewer' ? (
+                <div className="readonly-banner">
+                  <InfoCircleOutlined />
+                  <span>当前为只读账号，所有写入操作都会被系统拒绝。</span>
+                </div>
+              ) : null}
+              <Routes>
+                <Route path="/" element={<Dashboard />} />
+                <Route path="/vouchers" element={<Vouchers />} />
+                <Route path="/vouchers/new" element={user?.role === 'viewer' ? <Navigate to="/vouchers" replace /> : <VoucherEdit />} />
+                <Route path="/vouchers/:id" element={<VoucherEdit />} />
+                <Route path="/accounts" element={<Accounts />} />
+                <Route path="/partners" element={<Partners />} />
+                <Route path="/aging" element={<Aging />} />
+                <Route path="/assets" element={<Assets />} />
+                <Route path="/vat" element={<Vat />} />
+                <Route path="/reports/tb" element={<TrialBalance />} />
+                <Route path="/reports/bs" element={<BalanceSheet />} />
+                <Route path="/reports/pl" element={<Profit />} />
+                <Route path="/periods" element={<Periods />} />
+                <Route path="/users" element={user?.role === 'admin' ? <Users /> : <Navigate to="/" replace />} />
+                <Route path="/audit-logs" element={user?.role === 'admin' ? <AuditLogs /> : <Navigate to="/" replace />} />
+                <Route path="*" element={<Navigate to="/" replace />} />
+              </Routes>
+            </div>
           </Content>
         </Layout>
+
+        <Drawer
+          className="mobile-nav-drawer"
+          open={isMobile && drawerOpen}
+          onClose={() => setDrawerOpen(false)}
+          placement="left"
+          width={280}
+          closable={false}
+          styles={{ body: { padding: 0 }, header: { display: 'none' } }}
+        >
+          <SideNav
+            menuItems={menuItems}
+            selected={selected}
+            onNavigate={onNavigate}
+            onClose={() => setDrawerOpen(false)}
+          />
+        </Drawer>
+
         <ChangePasswordModal
           open={pwOpen}
           onClose={() => setPwOpen(false)}
@@ -326,7 +447,7 @@ export default function App() {
 
   if (loading || !meta) {
     return (
-      <div className="login-wrap" style={{ background: '#f0f2f5' }}>
+      <div className="loading-screen">
         <Spin size="large" tip="加载中…">
           <div style={{ width: 200, height: 60 }} />
         </Spin>

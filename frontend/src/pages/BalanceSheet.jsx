@@ -83,6 +83,7 @@ export default function BalanceSheet() {
             <span>单位：元</span>
           </div>
 
+          <div className="report-scroll">
           <table className="fin">
             <thead>
               <tr>
@@ -119,6 +120,7 @@ export default function BalanceSheet() {
               })}
             </tbody>
           </table>
+          </div>
 
           <div style={{ marginTop: 10, fontSize: 11, color: '#9ca3af' }}>空白表示无余额。季报取季末月期末时点数。</div>
         </div>

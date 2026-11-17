@@ -112,7 +112,7 @@ export default function TrialBalance() {
           columns={columns}
           dataSource={data?.rows || []}
           pagination={false}
-          scroll={{ y: 'calc(100vh - 300px)' }}
+          scroll={{ y: 'calc(100vh - 300px)', x: 980 }}
           summary={() => (
             <Table.Summary fixed>
               <Table.Summary.Row style={{ fontWeight: 600, background: '#fafafa' }}>

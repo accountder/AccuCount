@@ -163,6 +163,10 @@ def main():
         ("净利润 120,000", pl["net_profit"] == c(120_000)),
         ("应交税费为负（留抵 52,000）",
          [r for r in bs["right"] if r["key"] == "B6"][0]["value"] == c(-52_000)),
+        ("累计折旧以正数列示 20,000",
+         next(r["value"] for r in bs["left"] if r["key"] == "A20") == c(20_000)),
+        ("固定资产账面价值 480,000",
+         next(r["value"] for r in bs["left"] if r["key"] == "A21") == c(480_000)),
         ("结转后凭证借贷相等", sum(l["debit"] for l in lines) == sum(l["credit"] for l in lines)),
     ]
     print("\n=== 断言 ===")

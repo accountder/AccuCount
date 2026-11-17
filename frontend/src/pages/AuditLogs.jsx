@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from 'react'
-import { Button, Input, Space, Table, Tag, App as AntApp } from 'antd'
+import { Button, Card, Input, Space, Table, Tag, App as AntApp } from 'antd'
 import { ReloadOutlined, SearchOutlined } from '@ant-design/icons'
 import dayjs from 'dayjs'
 import { api, errMsg } from '../api'
@@ -65,11 +65,12 @@ export default function AuditLogs() {
         </Space>
       </div>
 
+      <Card size="small" bordered={false}>
       <Table
         rowKey="id"
-        size="small"
         loading={loading}
         dataSource={rows}
+        scroll={{ x: 900 }}
         columns={[
           { title: '时间', dataIndex: 'time', width: 170, render: (v) => dayjs(v).format('YYYY-MM-DD HH:mm:ss') },
           { title: '用户', dataIndex: 'user', width: 110 },
@@ -87,6 +88,7 @@ export default function AuditLogs() {
           onChange: (p, s) => load(p, s),
         }}
       />
+      </Card>
     </div>
   )
 }

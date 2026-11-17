@@ -70,6 +70,7 @@ export default function Profit() {
             <span>单位：元</span>
           </div>
 
+          <div className="report-scroll">
           <table className="fin">
             <thead>
               <tr>
@@ -90,6 +91,7 @@ export default function Profit() {
               ))}
             </tbody>
           </table>
+          </div>
 
           <div style={{ marginTop: 10, fontSize: 11, color: '#9ca3af' }}>
             空白表示本期无发生额。{isQuarter ? '季报的「本季金额」为该季度三个月合计，「本年累计」为年初至季末。' : ''}

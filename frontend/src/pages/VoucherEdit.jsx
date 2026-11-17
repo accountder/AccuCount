@@ -584,14 +584,14 @@ export default function VoucherEdit() {
 
   return (
     <div>
-      <div className="page-head">
-        <Space>
+      <div className="page-head voucher-page-head">
+        <Space className="voucher-head-title">
           <Button icon={<ArrowLeftOutlined />} onClick={() => nav('/vouchers')}>
             返回
           </Button>
           <div>
             <div className="page-title">
-              {voucher ? `记账凭证 ${voucher.no}` : '新增记账凭证'}
+              {voucher ? `记账凭证 ${voucher.no}` : '录入记账凭证'}
               {voucher ? (
                 <Tag color={STATUS[voucher.status]?.color} style={{ marginLeft: 8 }}>
                   {STATUS[voucher.status]?.label}
@@ -605,7 +605,7 @@ export default function VoucherEdit() {
             </div>
           </div>
         </Space>
-        <Space>
+        <Space className="voucher-head-actions">
           {canEdit ? (
             <>
               <Button icon={<SaveOutlined />} loading={saving} onClick={() => save(false, false)}>
@@ -660,62 +660,61 @@ export default function VoucherEdit() {
         />
       ) : null}
 
-      <Card size="small" bordered={false} loading={loading} bodyStyle={{ padding: 0 }}>
+      <Card className="voucher-card" bordered={false} loading={loading} bodyStyle={{ padding: 0 }}>
         <div className="voucher-paper">
           <div className="voucher-title-row">
             <span className="t">记账凭证</span>
             <span className="p">{periodOfDate.replace('-', ' 年 ')} 月</span>
           </div>
-          <Space size={20} wrap style={{ marginBottom: 10 }}>
-            <span>
-              <span style={{ color: '#6b7280', marginRight: 6, fontSize: 12 }}>日期</span>
+          <div className="voucher-meta-grid">
+            <label className="voucher-field">
+              <span>业务日期</span>
               <DatePicker
                 value={date}
                 onChange={(d) => d && setDate(d)}
                 allowClear={false}
                 disabled={readOnly || closedPeriod}
-                style={{ width: 140 }}
                 format="YYYY-MM-DD"
                 disabledDate={(d) => {
                   const p = meta.periods.find((x) => x.code === d.format('YYYY-MM'))
                   return !p || p.status === 'closed'
                 }}
               />
-            </span>
-            <span>
-              <span style={{ color: '#6b7280', marginRight: 6, fontSize: 12 }}>凭证字</span>
+            </label>
+            <label className="voucher-field">
+              <span>凭证字</span>
               <Select
                 value={word}
                 onChange={setWord}
                 disabled={readOnly || closedPeriod}
-                style={{ width: 78 }}
                 options={['记', '收', '付', '转'].map((v) => ({ value: v, label: v }))}
               />
-            </span>
-            <span>
-              <span style={{ color: '#6b7280', marginRight: 6, fontSize: 12 }}>附单据</span>
-              <InputNumber
-                value={attachments}
-                onChange={setAttachments}
-                disabled={readOnly || closedPeriod}
-                min={0}
-                controls={false}
-                style={{ width: 70, textAlign: 'right' }}
-              />
-              <span style={{ color: '#6b7280', marginLeft: 6, fontSize: 12 }}>张</span>
-            </span>
-            <span style={{ flex: 1 }} />
-          </Space>
+            </label>
+            <label className="voucher-field">
+              <span>附单据</span>
+              <div className="attachment-field">
+                <InputNumber
+                  value={attachments}
+                  onChange={setAttachments}
+                  disabled={readOnly || closedPeriod}
+                  min={0}
+                  controls={false}
+                />
+                <em>张</em>
+              </div>
+            </label>
+          </div>
 
-          <table className="fin" style={{ tableLayout: 'fixed' }}>
+          <div className="voucher-table-wrap">
+          <table className="fin voucher-entry-table" style={{ tableLayout: 'fixed' }}>
             <colgroup>
-              <col style={{ width: 38 }} />
-              <col style={{ width: 226 }} />
+              <col style={{ width: 36 }} />
+              <col style={{ width: 210 }} />
               <col />
-              <col style={{ width: 168 }} />
-              <col style={{ width: 140 }} />
-              <col style={{ width: 140 }} />
-              <col style={{ width: 44 }} />
+              <col style={{ width: 150 }} />
+              <col style={{ width: 125 }} />
+              <col style={{ width: 125 }} />
+              <col style={{ width: 42 }} />
             </colgroup>
             <thead>
               <tr>
@@ -734,7 +733,7 @@ export default function VoucherEdit() {
                 return (
                   <tr key={i}>
                     <td style={{ textAlign: 'center', color: '#9ca3af' }}>{i + 1}</td>
-                    <td style={cellStyle}>
+                    <td style={cellStyle} data-label="摘要">
                       <Input
                         ref={setRef(i, 'summary')}
                         value={l.summary}
@@ -750,7 +749,7 @@ export default function VoucherEdit() {
                         variant="borderless"
                       />
                     </td>
-                    <td style={cellStyle}>
+                    <td style={cellStyle} data-label="会计科目">
                       <Select
                         ref={setRef(i, 'account')}
                         showSearch
@@ -782,7 +781,7 @@ export default function VoucherEdit() {
                         }}
                       />
                     </td>
-                    <td style={cellStyle}>
+                    <td style={cellStyle} data-label="往来单位 / 税率">
                       {auxTypeOf(acc) ? (
                         <Select
                           allowClear
@@ -810,7 +809,7 @@ export default function VoucherEdit() {
                         />
                       ) : null}
                     </td>
-                    <td style={cellStyle}>
+                    <td style={cellStyle} data-label="借方金额">
                       <InputNumber
                         {...numInput}
                         ref={setRef(i, 'debit')}
@@ -820,7 +819,7 @@ export default function VoucherEdit() {
                         onKeyDown={amountKeyDown(i, 'debit')}
                       />
                     </td>
-                    <td style={cellStyle}>
+                    <td style={cellStyle} data-label="贷方金额">
                       <InputNumber
                         {...numInput}
                         ref={setRef(i, 'credit')}
@@ -854,8 +853,9 @@ export default function VoucherEdit() {
               </tr>
             </tbody>
           </table>
+          </div>
 
-          <Space style={{ marginTop: 10 }} wrap>
+          <div className="voucher-actions">
             {!readOnly && !closedPeriod ? (
               <Button size="small" icon={<PlusOutlined />} onClick={addLine}>
                 加一行
@@ -883,16 +883,15 @@ export default function VoucherEdit() {
                   : `借贷不平衡，差额 ${fmt(totals.diff)} 元`}
             </span>
             {closedPeriod ? <Tag color="orange">本期已结账，不可修改</Tag> : null}
-          </Space>
+          </div>
 
-          <div style={{ marginTop: 12 }}>
+          <div className="voucher-note">
             <Input.TextArea
               value={note}
               onChange={(e) => setNote(e.target.value)}
               disabled={readOnly || closedPeriod}
               placeholder="备注（可选）"
               autoSize={{ minRows: 1, maxRows: 3 }}
-              style={{ fontSize: 12 }}
             />
           </div>
 
