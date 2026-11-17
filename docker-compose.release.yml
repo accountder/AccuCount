@@ -1,0 +1,22 @@
+# AccuCount prebuilt image deployment
+# Usage: docker compose -f docker-compose.release.yml up -d
+name: accucount
+
+services:
+  accucount:
+    image: ghcr.io/accountder/accucount:${ACCUCOUNT_VERSION:-latest}
+    container_name: accucount
+    ports:
+      - "8070:8090"
+    volumes:
+      - "./data:/data"
+    environment:
+      TZ: "Asia/Shanghai"
+      ACCUCOUNT_DATA: "/data"
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8090/api/health', timeout=3)"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 20s

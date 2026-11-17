@@ -1,5 +1,7 @@
 # AccuCount 账务系统（小企业会计准则）
 
+![Build and Publish](https://github.com/accountder/AccuCount/actions/workflows/docker-publish.yml/badge.svg)
+
 > 准确入账，清晰经营。面向中国小微企业的轻量财务核算引擎。
 
 一套自用的业财账务系统：复式记账 → 账簿 → 财务报表，全流程闭环。
@@ -119,7 +121,39 @@
 - 部署：单容器，数据落在 `/data` 一个目录
 - 安全：PBKDF2 密码哈希、HMAC 令牌、12 小时有效期、令牌版本失效、集中写权限守卫
 
-## 五、本地运行
+## 五、运行方式
+
+### 方式 A：直接使用预构建镜像（推荐）
+
+无需克隆源码，也不需要安装 Node/Python。只需 Docker，然后下载
+`docker-compose.release.yml`，或在本仓库执行：
+
+```bash
+docker compose -f docker-compose.release.yml up -d
+```
+
+镜像地址：
+
+```text
+ghcr.io/accountder/accucount:latest
+ghcr.io/accountder/accucount:0.2.0
+```
+
+指定版本时设置 `ACCUCOUNT_VERSION`（Linux/macOS）：
+
+```bash
+ACCUCOUNT_VERSION=0.2.0 docker compose -f docker-compose.release.yml up -d
+```
+
+数据保存在当前目录的 `data/` 中。
+
+### 方式 B：从源码构建
+
+```bash
+docker compose -f docker-compose.yml up -d --build
+```
+
+### 本地开发
 
 ```bash
 # 后端
@@ -139,10 +173,35 @@ npm run build
 初始账号 `admin` / `admin123`，首次启动自动建账、建科目表、建期间。
 **首次登录后请立即修改密码**，再到「账号与权限」创建会计或只读账号。
 
-## 六、Docker 部署
+## 六、自动构建与发布
+
+GitHub Actions 工作流：
+
+```text
+.github/workflows/docker-publish.yml
+```
+
+触发条件：
+
+- 推送到 `main`：发布 `main`、`latest`、`sha-*` 标签
+- 推送 `v*` 标签：发布完整版本、次版本、主版本和 Git 标签
+- 手动运行 `workflow_dispatch`
+
+发布目标：
+
+```text
+ghcr.io/accountder/accucount
+```
+
+构建前会自动运行会计引擎测试和前端生产构建。发布镜像同时支持：
+
+- `linux/amd64`
+- `linux/arm64`
+
+### 从源码部署
 
 ```bash
-docker compose up -d --build      # 默认映射 8070:8090
+docker compose -f docker-compose.yml up -d --build      # 默认映射 8070:8090
 ```
 
 数据卷 `./data` 挂到容器 `/data`，里面是 `cnerp.db` 与签名密钥 `.secret`。
