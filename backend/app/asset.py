@@ -13,7 +13,7 @@ from datetime import date
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from .models import Account, Asset, AssetDep, Voucher, VoucherLine
+from .models import BOOKED_STATUSES, Account, Asset, AssetDep, Voucher, VoucherLine
 from .util import period_add
 
 
@@ -281,8 +281,8 @@ def unpost_depreciation(db: Session, period: str) -> dict:
     vids = {r.voucher_id for r in recs if r.voucher_id}
     for vid in vids:
         v = db.get(Voucher, vid)
-        if v and v.status == "posted":
-            raise ValueError("折旧凭证已记账，请先反记账再撤销")
+        if v and v.status in BOOKED_STATUSES:
+            raise ValueError("折旧凭证已审核入账，请先反审核再撤销")
     for r in recs:
         a = db.get(Asset, r.asset_id)
         if a:

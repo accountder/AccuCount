@@ -102,7 +102,7 @@ export default function Aging() {
           </div>
         ) },
       {
-        title: '期末余额', dataIndex: 'balance', width: 122, className: 'num',
+        title: '期末余额', dataIndex: 'balance', width: 122, className: 'num', align: 'right',
         render: (v) => <b>{fmt(v)}</b>,
       },
       ...bands.map((b) => ({
@@ -110,10 +110,11 @@ export default function Aging() {
         dataIndex: ['cells', String(b.seq)],
         width: 92,
         className: 'num',
+        align: 'right',
         render: (v) => (v ? fmt(v) : <span style={{ color: '#d1d5db' }}>—</span>),
       })),
       {
-        title: '逾期', dataIndex: 'overdue', width: 108, className: 'num',
+        title: '逾期', dataIndex: 'overdue', width: 108, className: 'num', align: 'right',
         render: (v) => (v ? <span style={{ color: '#c0392b', fontWeight: 600 }}>{fmt(v)}</span> : <span style={{ color: '#d1d5db' }}>—</span>),
       },
       {
@@ -266,7 +267,7 @@ export default function Aging() {
                   scroll={{ x: 1010, y: 'calc(100vh - 430px)' }}
                   summary={() =>
                     tot ? (
-                      <Table.Summary fixed>
+                      <Table.Summary>
                         <Table.Summary.Row style={{ fontWeight: 600, background: '#fafafa' }}>
                           <Table.Summary.Cell index={0}>合计</Table.Summary.Cell>
                           <Table.Summary.Cell index={1} className="num">{fmt(tot.balance)}</Table.Summary.Cell>

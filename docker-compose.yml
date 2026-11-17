@@ -1,7 +1,7 @@
 services:
   accucount:
     build: .
-    image: accucount:0.2.1
+    image: accucount:0.2.2
     container_name: accucount
     ports:
       - "8070:8090"

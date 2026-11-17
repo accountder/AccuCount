@@ -1,4 +1,4 @@
-import React, { useContext, useEffect, useState } from 'react'
+import React, { useContext, useEffect, useRef, useState } from 'react'
 import { Button, Card, Space, Alert, App as AntApp } from 'antd'
 import { ExportOutlined, PrinterOutlined, ReloadOutlined } from '@ant-design/icons'
 import dayjs from 'dayjs'
@@ -12,7 +12,8 @@ export default function BalanceSheet() {
   const [data, setData] = useState(null)
   const [loading, setLoading] = useState(false)
   const [exporting, setExporting] = useState(false)
-  const { message } = AntApp.useApp()
+  const { message, notification } = AntApp.useApp()
+  const warnedKey = useRef('')
 
   const load = async () => {
     setLoading(true)
@@ -28,6 +29,34 @@ export default function BalanceSheet() {
   useEffect(() => {
     load()
   }, [sel])
+
+  useEffect(() => {
+    if (!data) return
+    const key = `${sel.kind}-${sel.period}-${data.diff}-${data.unclosed_profit}`
+    if (data.balanced) {
+      warnedKey.current = ''
+      return
+    }
+    if (warnedKey.current === key) return
+    warnedKey.current = key
+    notification.warning({
+      message: '资产负债表不平衡',
+      duration: 6,
+      placement: 'topRight',
+      description: (
+        <div style={{ fontSize: 12, lineHeight: 1.8 }}>
+          <div>资产总计：<b className="mono-num">{fmt(data.total_assets)}</b> 元</div>
+          <div>负债和所有者权益总计：<b className="mono-num">{fmt(data.total_liab_equity)}</b> 元</div>
+          <div>差额：<b className="mono-num" style={{ color: '#b42318' }}>{fmt(data.diff)}</b> 元</div>
+          <div style={{ marginTop: 8, color: '#526579' }}>
+            {data.diff_matches_unclosed_profit
+              ? `差额与未结转损益 ${fmt(data.unclosed_profit)} 元一致，请执行“一键结账”。`
+              : '差额与未结转损益不一致，请检查未审核凭证、科目类别或报表公式。'}
+          </div>
+        </div>
+      ),
+    })
+  }, [data, sel, notification])
 
   const doExport = async () => {
     setExporting(true)
@@ -69,7 +98,11 @@ export default function BalanceSheet() {
           showIcon
           style={{ marginBottom: 12 }}
           message={`报表不平：资产 ${fmt(data.total_assets)}，负债和所有者权益 ${fmt(data.total_liab_equity)}，差额 ${fmt(data.diff)}`}
-          description="常见原因：有未记账凭证、损益未结转，或某类科目未纳入报表取数范围。"
+          description={
+            data.diff_matches_unclosed_profit
+              ? `差额 ${fmt(data.diff)} 元与未结转损益 ${fmt(data.unclosed_profit)} 元一致，请执行“一键结账”结转损益。`
+              : '差额与未结转损益不一致，请检查未审核凭证、科目类别、漏记科目或报表公式。'
+          }
         />
       ) : null}
 

@@ -17,6 +17,7 @@ from .backup import create_backup_zip
 from .auth import current_user, hash_password, make_token, require_role, verify_password
 from .db import get_db
 from .models import (
+    BOOKED_STATUSES,
     Account,
     AgingBand,
     Asset,
@@ -416,6 +417,97 @@ def create_account(payload: dict = Body(...), db=Depends(get_db), user=Depends(c
     log(db, user, "account.create", code, name)
     db.commit()
     return acc_brief(a)
+
+
+QUICK_ACCOUNT_ROOTS = {
+    "1121": "customer",
+    "1122": "customer",
+    "1123": "supplier",
+    "2201": "supplier",
+    "2202": "supplier",
+    "2203": "customer",
+}
+
+
+class QuickChildAccountIn(BaseModel):
+    parent_code: str
+    name: str = Field(min_length=1, max_length=120)
+    tax_rate: int = 1300
+    remark: str = Field(default="", max_length=200)
+
+
+@router.post("/accounts/quick-child")
+def create_quick_child_account(body: QuickChildAccountIn,
+                              db=Depends(get_db), user=Depends(current_user)):
+    """在凭证录入时快速新增客户 / 供应商明细科目。
+
+    - 自动生成下一号明细科目，如 1122.01、1122.02
+    - 自动创建或复用对应往来档案
+    - 继承父科目的类别、方向和辅助核算类型
+    """
+    parent_code = body.parent_code.strip()
+    name = body.name.strip()
+    if not name:
+        raise HTTPException(400, "名称不能为空")
+    if parent_code not in QUICK_ACCOUNT_ROOTS:
+        raise HTTPException(400, "仅支持客户 / 供应商类往来科目")
+
+    parent = db.scalar(select(Account).where(Account.code == parent_code))
+    if not parent:
+        raise HTTPException(400, f"上级科目 {parent_code} 不存在")
+    if db.scalar(select(Account).where(Account.parent_id == parent.id, Account.name == name)):
+        raise HTTPException(400, f"“{name}”已存在于 {parent.code} {parent.name} 下")
+
+    children = db.scalars(select(Account).where(Account.parent_id == parent.id)).all()
+    nums = []
+    for c in children:
+        suffix = c.code.rsplit(".", 1)[-1]
+        if suffix.isdigit():
+            nums.append(int(suffix))
+    code = f"{parent.code}.{(max(nums) + 1) if nums else 1:02d}"
+
+    ptype = QUICK_ACCOUNT_ROOTS[parent_code]
+    partner = db.scalar(select(Partner).where(Partner.ptype == ptype, Partner.name == name))
+    if partner:
+        partner.enabled = True
+        if body.tax_rate:
+            partner.tax_rate = body.tax_rate
+    else:
+        rows = db.scalars(select(Partner).where(Partner.ptype == ptype)).all()
+        prefix = "C" if ptype == "customer" else "S"
+        nums2 = []
+        for p in rows:
+            if p.code.startswith(prefix) and p.code[1:].isdigit():
+                nums2.append(int(p.code[1:]))
+        pcode = f"{prefix}{(max(nums2) + 1) if nums2 else 1:03d}"
+        partner = Partner(
+            ptype=ptype,
+            code=pcode,
+            name=name,
+            tax_rate=body.tax_rate,
+            enabled=True,
+            remark=body.remark,
+        )
+        db.add(partner)
+        db.flush()
+
+    a = Account(
+        code=code,
+        name=name,
+        cat=parent.cat,
+        direction=parent.direction,
+        parent_id=parent.id,
+        level=code.count(".") + 1,
+        aux_types=ptype,
+        enabled=True,
+        remark=body.remark,
+    )
+    db.add(a)
+    parent.is_leaf = False
+    db.flush()
+    log(db, user, "account.quick_create", a.code, f"{parent.code} {parent.name} -> {name}")
+    db.commit()
+    return {"account": acc_brief(a), "partner": partner_out(partner)}
 
 
 @router.put("/accounts/{acc_id}")
@@ -885,7 +977,7 @@ def unaudit_voucher(vid: int, db=Depends(get_db), user=Depends(current_user)):
     if not v:
         raise HTTPException(404, "凭证不存在")
     if v.status != "audited":
-        raise HTTPException(400, "只有已审核未记账凭证可以反审核")
+        raise HTTPException(400, "只有已审核凭证可以反审核")
     check_period_open(db, v.period)
     v.status = "draft"
     v.auditor = ""
@@ -929,8 +1021,8 @@ def void_voucher(vid: int, db=Depends(get_db), user=Depends(current_user)):
     v = db.get(Voucher, vid)
     if not v:
         raise HTTPException(404, "凭证不存在")
-    if v.status == "posted":
-        raise HTTPException(400, "已记账凭证不能直接作废，请先反记账")
+    if v.status in BOOKED_STATUSES:
+        raise HTTPException(400, "已审核入账的凭证不能直接作废，请先反审核")
     check_period_open(db, v.period)
     v.status = "void"
     log(db, user, "voucher.void", v.id, f"{v.word}-{v.seq:04d}")
@@ -946,8 +1038,10 @@ def _bs_yuan(data):
                 r["value"] = from_cents(r["value"])
             if r.get("value_begin") is not None:
                 r["value_begin"] = from_cents(r["value_begin"])
-    for k in ("total_assets", "total_liab_equity", "diff"):
+    for k in ("total_assets", "total_liab_equity", "diff", "unclosed_profit"):
         data[k] = from_cents(data[k])
+    for item in data.get("unclosed_accounts", []):
+        item["amount"] = from_cents(item["amount"])
     return data
 
 
@@ -1061,16 +1155,16 @@ def r_check(period: str, db=Depends(get_db), user=Depends(current_user)):
     dr = db.scalar(
         select(func.coalesce(func.sum(VoucherLine.debit), 0))
         .join(Voucher, Voucher.id == VoucherLine.voucher_id)
-        .where(Voucher.status == "posted", Voucher.period <= period)
+        .where(Voucher.status.in_(BOOKED_STATUSES), Voucher.period <= period)
     ) or 0
     cr = db.scalar(
         select(func.coalesce(func.sum(VoucherLine.credit), 0))
         .join(Voucher, Voucher.id == VoucherLine.voucher_id)
-        .where(Voucher.status == "posted", Voucher.period <= period)
+        .where(Voucher.status.in_(BOOKED_STATUSES), Voucher.period <= period)
     ) or 0
     unposted = db.scalar(
         select(func.count()).select_from(Voucher)
-        .where(Voucher.period == period, Voucher.status.in_(["draft", "audited"]))
+        .where(Voucher.period == period, Voucher.status == "draft", Voucher.source != "carryover")
     ) or 0
     tpl = get_template(db, "balance_sheet")
     bs = calc.balance_sheet(db, period, tpl)
@@ -1092,13 +1186,15 @@ def list_periods(db=Depends(get_db), user=Depends(current_user)):
     out = []
     for p in rows:
         posted = db.scalar(
-            select(func.count()).select_from(Voucher).where(Voucher.period == p.code, Voucher.status == "posted")
+            select(func.count()).select_from(Voucher)
+            .where(Voucher.period == p.code, Voucher.status.in_(BOOKED_STATUSES))
         ) or 0
         pending = db.scalar(
-            select(func.count()).select_from(Voucher).where(Voucher.period == p.code, Voucher.status.in_(["draft", "audited"]))
+            select(func.count()).select_from(Voucher)
+            .where(Voucher.period == p.code, Voucher.status == "draft", Voucher.source != "carryover")
         ) or 0
-        out.append({"code": p.code, "status": p.status, "posted": posted, "pending": pending,
-                    "closed_at": p.closed_at.isoformat() if p.closed_at else None})
+        out.append({"code": p.code, "status": p.status, "posted": posted, "booked": posted,
+                    "pending": pending, "closed_at": p.closed_at.isoformat() if p.closed_at else None})
     return out
 
 
@@ -1107,10 +1203,10 @@ def carryover(code: str, db=Depends(get_db), user=Depends(current_user)):
     check_period_open(db, code)
     pending = db.scalar(
         select(func.count()).select_from(Voucher)
-        .where(Voucher.period == code, Voucher.status.in_(["draft", "audited"]))
+        .where(Voucher.period == code, Voucher.status == "draft", Voucher.source != "carryover")
     ) or 0
     if pending:
-        raise HTTPException(400, f"本期还有 {pending} 张未记账凭证，请先记账再结转")
+        raise HTTPException(400, f"本期还有 {pending} 张未审核凭证，请先审核再结转")
 
     existing = db.scalar(
         select(Voucher).where(Voucher.period == code, Voucher.source == "carryover", Voucher.status != "void")
@@ -1124,7 +1220,7 @@ def carryover(code: str, db=Depends(get_db), user=Depends(current_user)):
 
     v = Voucher(period=code, vdate=date.fromisoformat(code + "-01"), word="记",
                 seq=_next_seq(db, code, "记"), note="结转本期损益", maker=user["username"],
-                status="draft", source="carryover")
+                auditor=user["username"], status="audited", source="carryover")
     db.add(v)
     db.flush()
     for i, l in enumerate(lines, 1):
@@ -1137,6 +1233,7 @@ def carryover(code: str, db=Depends(get_db), user=Depends(current_user)):
 
 @router.post("/periods/{code}/close")
 def close_period(code: str, db=Depends(get_db), user=Depends(require_role("admin"))):
+    """一键结账：先自动结转损益，再锁定期间。"""
     p = db.scalar(select(Period).where(Period.code == code))
     if not p:
         raise HTTPException(404, "期间不存在")
@@ -1145,10 +1242,55 @@ def close_period(code: str, db=Depends(get_db), user=Depends(require_role("admin
 
     pending = db.scalar(
         select(func.count()).select_from(Voucher)
-        .where(Voucher.period == code, Voucher.status.in_(["draft", "audited"]))
+        .where(Voucher.period == code, Voucher.status == "draft", Voucher.source != "carryover")
     ) or 0
     if pending:
-        raise HTTPException(400, f"本期还有 {pending} 张凭证未记账，不能结账")
+        raise HTTPException(400, f"本期还有 {pending} 张未审核凭证，不能结账")
+
+    carry = db.scalar(
+        select(Voucher).where(
+            Voucher.period == code,
+            Voucher.source == "carryover",
+            Voucher.status != "void",
+        )
+    )
+    carryover_no = f"{carry.word}-{carry.seq:04d}" if carry else None
+    profit = None
+
+    if carry and carry.status == "draft":
+        carry.status = "audited"
+        carry.auditor = user["username"]
+        db.flush()
+        carryover_no = f"{carry.word}-{carry.seq:04d}"
+    elif not carry:
+        lines, total = calc.build_carryover(db, code)
+        if lines:
+            carry = Voucher(
+                period=code,
+                vdate=date.fromisoformat(code + "-01"),
+                word="记",
+                seq=_next_seq(db, code, "记"),
+                note="结转本期损益",
+                maker=user["username"],
+                auditor=user["username"],
+                status="audited",
+                source="carryover",
+            )
+            db.add(carry)
+            db.flush()
+            for i, l in enumerate(lines, 1):
+                carry.lines.append(VoucherLine(
+                    line_no=i,
+                    summary=l["summary"],
+                    account_id=l["account_id"],
+                    debit=l["debit"],
+                    credit=l["credit"],
+                ))
+            db.flush()
+            carryover_no = f"{carry.word}-{carry.seq:04d}"
+            profit = from_cents(total)
+        else:
+            profit = 0.0
 
     book = calc.Book(db, code)
     not_carried = [
@@ -1159,15 +1301,21 @@ def close_period(code: str, db=Depends(get_db), user=Depends(require_role("admin
     if not_carried:
         raise HTTPException(
             400,
-            "本期损益类科目尚未结转：" + "、".join(not_carried[:4])
-            + ("…" if len(not_carried) > 4 else "") + "，请先执行结转损益",
+            "本期损益类科目仍未结转：" + "、".join(not_carried[:4])
+            + ("…" if len(not_carried) > 4 else ""),
         )
 
     p.status = "closed"
     p.closed_at = datetime.now()
-    log(db, user, "period.close", code)
+    log(db, user, "period.close", code, f"carryover={carryover_no or '-'}")
     db.commit()
-    return {"ok": True, "code": code, "status": p.status}
+    return {
+        "ok": True,
+        "code": code,
+        "status": p.status,
+        "carryover_no": carryover_no,
+        "profit": profit,
+    }
 
 
 @router.post("/periods/{code}/reopen")
@@ -1196,6 +1344,7 @@ def stats(period: str, db=Depends(get_db), user=Depends(current_user)):
         counts[st] = db.scalar(
             select(func.count()).select_from(Voucher).where(Voucher.period == period, Voucher.status == st)
         ) or 0
+    counts["booked"] = counts["audited"] + counts["posted"]
 
     book = calc.Book(db, period)
     cash = book.sum_codes("end", ["1001", "1002", "1012"])

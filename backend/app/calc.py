@@ -1,6 +1,6 @@
 """账务引擎：余额聚合、报表公式求值、结转损益。
 
-原则：一切取数只认 status='posted' 的凭证；金额单位始终是「分」。
+原则：一切取数只认已审核/已入账凭证；金额单位始终是「分」。
 """
 from collections import defaultdict
 from typing import Iterable
@@ -8,7 +8,7 @@ from typing import Iterable
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
-from .models import Account, Voucher, VoucherLine
+from .models import BOOKED_STATUSES, Account, Voucher, VoucherLine
 from .util import period_add
 
 
@@ -22,7 +22,7 @@ def _posted_sums(db: Session, start: str | None = None, end: str | None = None):
             func.coalesce(func.sum(VoucherLine.credit), 0),
         )
         .join(Voucher, Voucher.id == VoucherLine.voucher_id)
-        .where(Voucher.status == "posted")
+        .where(Voucher.status.in_(BOOKED_STATUSES))
         .group_by(VoucherLine.account_id)
     )
     if start:
@@ -195,6 +195,18 @@ def balance_sheet(db: Session, period: str, template: dict):
 
     total_assets = lv_end.get(_total_key(template["left"], "assets") or "", 0)
     total_le = rv_end.get(_total_key(template["right"], "liab_equity") or "", 0)
+    diff = total_assets - total_le
+    unclosed_profit = book.profit("end")
+    unclosed_accounts = [
+        {
+            "code": book.accounts[aid].code,
+            "name": book.accounts[aid].name,
+            "amount": val,
+        }
+        for aid, val in book.nets("end").items()
+        if book.accounts[aid].cat == "pl" and val != 0
+    ]
+    unclosed_accounts.sort(key=lambda x: x["code"])
     return {
         "title": template["title"],
         "subtitle": template["subtitle"],
@@ -205,7 +217,10 @@ def balance_sheet(db: Session, period: str, template: dict):
         "total_assets": total_assets,
         "total_liab_equity": total_le,
         "balanced": total_assets == total_le,
-        "diff": total_assets - total_le,
+        "diff": diff,
+        "unclosed_profit": unclosed_profit,
+        "unclosed_accounts": unclosed_accounts,
+        "diff_matches_unclosed_profit": diff == unclosed_profit,
     }
 
 
@@ -305,7 +320,7 @@ def ledger(db: Session, account_id: int, period_from: str, period_to: str):
     stmt = (
         select(VoucherLine, Voucher)
         .join(Voucher, Voucher.id == VoucherLine.voucher_id)
-        .where(Voucher.status == "posted", VoucherLine.account_id == account_id)
+        .where(Voucher.status.in_(BOOKED_STATUSES), VoucherLine.account_id == account_id)
         .where(Voucher.period >= period_from, Voucher.period <= period_to)
         .order_by(Voucher.period, Voucher.seq, VoucherLine.line_no)
     )

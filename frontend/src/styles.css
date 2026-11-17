@@ -841,3 +841,191 @@ table.fin.voucher-entry-table tr.bold td { background: #f6f9fc; color: var(--ink
     animation-iteration-count: 1 !important;
   }
 }
+
+
+/* Quick account creation */
+.quick-account-hint {
+  padding: 11px 12px;
+  border: 1px solid #dbe8f1;
+  border-radius: 9px;
+  background: #f3f8fb;
+  color: #526579;
+  font-size: 11.5px;
+  line-height: 1.7;
+}
+
+.quick-account-form {
+  display: grid;
+  gap: 14px;
+  margin-top: 18px;
+}
+
+.quick-account-field {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.quick-account-field > span {
+  color: var(--ink-soft);
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.quick-account-preview {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 10px 12px;
+  border: 1px dashed #cbd8e4;
+  border-radius: 8px;
+  background: #fbfcfe;
+  color: var(--ink-soft);
+  font-size: 12px;
+}
+
+.quick-account-preview span {
+  color: var(--muted-soft);
+  font-size: 10.5px;
+  white-space: nowrap;
+}
+
+@media (max-width: 480px) {
+  .quick-account-preview { align-items: flex-start; flex-direction: column; gap: 4px; }
+}
+
+
+/* Period closing cards */
+.period-note {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  margin-bottom: 16px;
+  padding: 12px 14px;
+  border: 1px solid #dbe7f0;
+  border-radius: 10px;
+  background: #f4f9fc;
+  color: #526579;
+  font-size: 12px;
+  line-height: 1.65;
+}
+
+.period-note > .anticon {
+  margin-top: 2px;
+  color: var(--brand);
+  font-size: 16px;
+}
+
+.period-note strong,
+.period-note span {
+  display: block;
+}
+
+.period-note strong { margin-bottom: 2px; color: var(--ink-soft); font-size: 12.5px; }
+
+.period-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+  gap: 14px;
+}
+
+.period-card {
+  border: 1px solid var(--line) !important;
+  transition: border-color 0.18s ease, background 0.18s ease;
+}
+
+.period-card.is-active {
+  border-color: #a9c6dc !important;
+  background: #fbfdff;
+}
+
+.period-card.is-closed { background: #fafbfc; }
+
+.period-card-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.period-code {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--ink);
+  font-size: 17px;
+  font-weight: 650;
+  font-variant-numeric: tabular-nums;
+}
+
+.period-code .anticon { color: var(--brand); font-size: 15px; }
+.period-code span { letter-spacing: 0.01em; }
+
+.period-stats {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 10px;
+  margin-top: 18px;
+}
+
+.period-stats > div {
+  padding: 11px 12px;
+  border-radius: 9px;
+  background: var(--surface-soft);
+}
+
+.period-stats span {
+  display: block;
+  color: var(--muted-soft);
+  font-size: 10.5px;
+}
+
+.period-stats strong {
+  display: block;
+  margin-top: 4px;
+  color: var(--ink);
+  font-size: 22px;
+  font-weight: 680;
+  font-variant-numeric: tabular-nums;
+}
+
+.period-stats strong.has-pending { color: var(--warning); }
+
+.period-status-line {
+  min-height: 34px;
+  margin-top: 13px;
+  color: var(--muted);
+  font-size: 11px;
+  line-height: 1.55;
+}
+
+.period-status-line .ok { color: var(--success); }
+.period-status-line .warn { color: var(--warning); }
+
+.period-card-actions {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+  margin-top: 14px;
+  padding-top: 13px;
+  border-top: 1px solid var(--line-soft);
+}
+
+.period-card-actions .ant-btn:last-child { margin-left: auto; }
+.period-loading { display: grid; min-height: 240px; place-items: center; }
+
+@media (max-width: 600px) {
+  .period-grid { grid-template-columns: 1fr; }
+  .period-card-actions .ant-btn:last-child { margin-left: 0; }
+}
+
+
+/* Ant Design fixed scrollbar spacer in summary rows */
+.ant-table-summary .summary-spacer {
+  width: 15px !important;
+  min-width: 15px !important;
+  max-width: 15px !important;
+  padding: 0 !important;
+}
+.ant-table-summary .summary-action { padding: 0 !important; }

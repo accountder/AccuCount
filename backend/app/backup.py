@@ -40,7 +40,7 @@ def create_backup_zip() -> bytes:
 
         manifest = {
             "product": "AccuCount",
-            "version": "0.2.1",
+            "version": "0.2.2",
             "created_at": now.isoformat(timespec="seconds"),
             "database": "accucount.db",
             "note": "恢复时请先停止服务并备份现有 data 目录，再用本文件替换 cnerp.db。",

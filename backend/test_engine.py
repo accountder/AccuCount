@@ -153,20 +153,41 @@ def main():
         nm = next((a.name for a in accs.values() if a.id == l["account_id"]), "?")
         print(f"  {nm:<16} 借 {from_cents(l['debit']):>12,.2f}  贷 {from_cents(l['credit']):>12,.2f}")
 
+    carry = Voucher(
+        period=P, vdate=date(2026, 11, 30), word="记", seq=12,
+        note="结转本期损益", maker="test", auditor="test",
+        status="audited", source="carryover",
+    )
+    db.add(carry)
+    db.flush()
+    for i, l in enumerate(lines, 1):
+        db.add(VoucherLine(
+            voucher_id=carry.id, line_no=i, summary=l["summary"],
+            account_id=l["account_id"], debit=l["debit"], credit=l["credit"],
+        ))
+    db.commit()
+
+    bs_after = calc.balance_sheet(db, P, BALANCE_SHEET)
+    pl_after = calc.profit_statement(db, P, PROFIT)
+    print(f"\n结转后资产负债表差额 {from_cents(bs_after['diff']):,.2f}")
+
     # ---- 断言
     checks = [
-        ("资产总计 = 1,437,000", bs["total_assets"] == c(1_437_000)),
-        ("报表平衡", bs["balanced"]),
-        ("营业收入 400,000", pl["rows"][0]["value"] == c(400_000)),
+        ("结转前资产负债表不平", not bs["balanced"]),
+        ("结转前差额等于未结转利润 120,000",
+         bs["diff"] == c(120_000) and bs["unclosed_profit"] == c(120_000) and bs["diff_matches_unclosed_profit"]),
+        ("资产总计 = 1,437,000", bs_after["total_assets"] == c(1_437_000)),
+        ("结转后报表平衡", bs_after["balanced"]),
+        ("营业收入 400,000", pl_after["rows"][0]["value"] == c(400_000)),
         ("营业利润 120,000",
-         next(r["value"] for r in pl["rows"] if r["label"].startswith("二、营业利润")) == c(120_000)),
-        ("净利润 120,000", pl["net_profit"] == c(120_000)),
+         next(r["value"] for r in pl_after["rows"] if r["label"].startswith("二、营业利润")) == c(120_000)),
+        ("净利润 120,000", pl_after["net_profit"] == c(120_000)),
         ("应交税费为负（留抵 52,000）",
-         [r for r in bs["right"] if r["key"] == "B6"][0]["value"] == c(-52_000)),
+         [r for r in bs_after["right"] if r["key"] == "B6"][0]["value"] == c(-52_000)),
         ("累计折旧以正数列示 20,000",
-         next(r["value"] for r in bs["left"] if r["key"] == "A20") == c(20_000)),
+         next(r["value"] for r in bs_after["left"] if r["key"] == "A20") == c(20_000)),
         ("固定资产账面价值 480,000",
-         next(r["value"] for r in bs["left"] if r["key"] == "A21") == c(480_000)),
+         next(r["value"] for r in bs_after["left"] if r["key"] == "A21") == c(480_000)),
         ("结转后凭证借贷相等", sum(l["debit"] for l in lines) == sum(l["credit"] for l in lines)),
     ]
     print("\n=== 断言 ===")

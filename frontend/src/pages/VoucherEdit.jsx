@@ -14,8 +14,8 @@ import { AppCtx } from '../context'
 
 const STATUS = {
   draft: { label: '未审核', color: 'default' },
-  audited: { label: '已审核', color: 'blue' },
-  posted: { label: '已记账', color: 'green' },
+  audited: { label: '已审核入账', color: 'green' },
+  posted: { label: '已入账（旧）', color: 'green' },
   void: { label: '作废', color: 'red' },
 }
 
@@ -28,6 +28,15 @@ const RATES = [
   { value: 500, label: '5%' },
   { value: 300, label: '3%' },
   { value: 100, label: '1%' },
+]
+
+const QUICK_PARENTS = [
+  { value: '1122', label: '应收账款 / 客户' },
+  { value: '2202', label: '应付账款 / 供应商' },
+  { value: '1121', label: '应收票据 / 客户' },
+  { value: '2201', label: '应付票据 / 供应商' },
+  { value: '1123', label: '预付账款 / 供应商' },
+  { value: '2203', label: '预收账款 / 客户' },
 ]
 
 // ------------------------------------------------------------- 快捷键面板（复刻金蝶）
@@ -280,6 +289,12 @@ export default function VoucherEdit() {
   const [saving, setSaving] = useState(false)
   const [loading, setLoading] = useState(!!id)
   const [partners, setPartners] = useState([])
+  const [quickOpen, setQuickOpen] = useState(false)
+  const [quickParent, setQuickParent] = useState('1122')
+  const [quickName, setQuickName] = useState('')
+  const [quickTaxRate, setQuickTaxRate] = useState(1300)
+  const [quickLine, setQuickLine] = useState(null)
+  const [quickSaving, setQuickSaving] = useState(false)
 
   const readOnly = !canWrite || (voucher ? voucher.status !== 'draft' : false)
   const periodOfDate = date.format('YYYY-MM')
@@ -322,7 +337,10 @@ export default function VoucherEdit() {
   }, [id])
 
   const options = useMemo(
-    () => accounts.map((a) => ({ value: a.id, label: `${a.code}  ${a.name}`, code: a.code, name: a.name })),
+    () => [
+      ...accounts.map((a) => ({ value: a.id, label: `${a.code}  ${a.name}`, code: a.code, name: a.name })),
+      { value: '__quick__', label: '新增客户 / 供应商明细科目', code: '__quick__', name: '新增客户 / 供应商明细科目' },
+    ],
     [accounts],
   )
   const accMap = useMemo(() => new Map(accounts.map((a) => [a.id, a])), [accounts])
@@ -335,6 +353,9 @@ export default function VoucherEdit() {
   }, [partners])
 
   const auxTypeOf = (acc) => ((acc?.aux_types || '').split(',')[0] || '').trim()
+
+  const rootOfAccount = (acc) =>
+    QUICK_PARENTS.find((p) => acc?.code === p.value || acc?.code?.startsWith(p.value + '.'))?.value
   const isTaxAcc = (acc) => /^2221\.01\./.test(acc?.code || '')
 
   const totals = useMemo(() => {
@@ -559,6 +580,43 @@ export default function VoucherEdit() {
     }
   }
 
+  const createQuickAccount = async () => {
+    if (!quickName.trim()) return message.warning('请输入客户 / 供应商名称')
+    setQuickSaving(true)
+    try {
+      const r = await api.createQuickChildAccount({
+        parent_code: quickParent,
+        name: quickName.trim(),
+        tax_rate: quickTaxRate,
+        remark: '',
+      })
+      const [accList, partnerList] = await Promise.all([
+        api.accounts({ only_enabled: true }),
+        api.partnerOptions(),
+      ])
+      setAccounts(accList.filter((a) => a.is_leaf && a.enabled))
+      setPartners(partnerList)
+      if (quickLine !== null && lines[quickLine]) {
+        const acc = r.account
+        const partner = r.partner
+        const auxType = (acc.aux_types || '').split(',')[0] || partner.ptype
+        setLine(quickLine, {
+          account_id: acc.id,
+          aux_type: auxType,
+          aux_name: partner.name,
+          tax_rate: partner.tax_rate,
+        })
+      }
+      message.success(`已新增 ${r.account.code} ${r.account.name}`)
+      setQuickName('')
+      setQuickOpen(false)
+    } catch (e) {
+      message.error(errMsg(e))
+    } finally {
+      setQuickSaving(false)
+    }
+  }
+
   const doCopy = async () => {
     const target = meta.open_period ? `${meta.open_period}-01` : meta.today
     try {
@@ -625,10 +683,7 @@ export default function VoucherEdit() {
             <Button onClick={() => doAct('audit', '已审核')}>审核</Button>
           ) : null}
           {canWrite && voucher?.status === 'audited' && !closedPeriod ? (
-            <>
-              <Button type="primary" onClick={() => doAct('post', '已记账')}>记账</Button>
-              <Button onClick={() => doAct('unaudit', '已反审核')}>反审核</Button>
-            </>
+            <Button onClick={() => doAct('unaudit', '已反审核')}>反审核</Button>
           ) : null}
           {showCopy ? (
             <Tooltip title={`把这张凭证复制成 ${meta.open_period || '本期'} 的新凭证，原凭证不动`}>
@@ -743,6 +798,8 @@ export default function VoucherEdit() {
                           if (v === '..') return copyPrevSummary(i)
                           setLine(i, { summary: v })
                         }}
+                        onDoubleClick={() => { if (i > 0) copyFirstSummary(i) }}
+                        title={i > 0 ? '双击自动填充第一行摘要' : undefined}
                         onKeyDown={summaryKeyDown(i)}
                         disabled={readOnly || closedPeriod}
                         placeholder="业务说明"
@@ -755,6 +812,14 @@ export default function VoucherEdit() {
                         showSearch
                         value={l.account_id}
                         onChange={(v) => {
+                          if (v === '__quick__') {
+                            const cur = accMap.get(lines[i].account_id)
+                            const root = rootOfAccount(cur)
+                            setQuickParent(root || '1122')
+                            setQuickLine(i)
+                            setQuickOpen(true)
+                            return
+                          }
                           const a = accMap.get(v)
                           setLine(i, { account_id: v, aux_type: auxTypeOf(a), aux_name: '' })
                         }}
@@ -898,15 +963,65 @@ export default function VoucherEdit() {
           <div className="voucher-sign">
             <span>制单人：{voucher?.maker || user?.name || user?.username || ''}</span>
             <span>审核人：{voucher?.auditor || ''}</span>
-            <span>记账人：{voucher?.poster || ''}</span>
           </div>
 
           <div className="voucher-tip">
-            注：结转损益请用「期末处理 → 结转损益」自动生成，不要手工录入，
+            注：结转损益由「期末处理 → 一键结账」自动生成，不要手工录入，
             否则利润表取数会受影响。已结账期间的凭证不能修改，需要重做请用「复制为新凭证」。
           </div>
         </div>
       </Card>
+
+      <Modal
+        title="新增客户 / 供应商明细科目"
+        open={quickOpen}
+        onCancel={() => setQuickOpen(false)}
+        onOk={createQuickAccount}
+        confirmLoading={quickSaving}
+        okText="创建并带入"
+        cancelText="取消"
+        width={480}
+        destroyOnClose
+      >
+        <div className="quick-account-hint">
+          用于把某个客户或供应商单独挂到应收、应付等往来科目下。创建后会自动生成下一号明细科目，并同步建立往来档案。
+        </div>
+        <div className="quick-account-form">
+          <label className="quick-account-field">
+            <span>上级科目</span>
+            <Select
+              value={quickParent}
+              onChange={setQuickParent}
+              options={QUICK_PARENTS.map((p) => ({
+                value: p.value,
+                label: `${p.value}　${p.label}`,
+              }))}
+            />
+          </label>
+          <label className="quick-account-field">
+            <span>明细名称</span>
+            <Input
+              value={quickName}
+              onChange={(e) => setQuickName(e.target.value)}
+              onPressEnter={createQuickAccount}
+              placeholder="例如：杭州某某科技有限公司"
+              maxLength={120}
+            />
+          </label>
+          <label className="quick-account-field">
+            <span>默认税率</span>
+            <Select
+              value={quickTaxRate}
+              onChange={setQuickTaxRate}
+              options={RATES}
+            />
+          </label>
+          <div className="quick-account-preview">
+            {quickParent}　{quickName.trim() || '新明细名称'}
+            <span>编码由系统自动生成</span>
+          </div>
+        </div>
+      </Modal>
 
       <Modal
         title="录入凭证快捷键"

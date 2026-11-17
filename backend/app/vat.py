@@ -18,7 +18,7 @@ from datetime import date
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
-from .models import Account, Voucher, VoucherLine
+from .models import BOOKED_STATUSES, Account, Voucher, VoucherLine
 from .util import period_add
 
 # 增值税一般纳税人主表行次（合并版）
@@ -65,7 +65,7 @@ def _sum_by_rate(db: Session, account_prefix: str, start: str, end: str, side: s
         select(VoucherLine.tax_rate, func.coalesce(func.sum(col), 0))
         .join(Voucher, Voucher.id == VoucherLine.voucher_id)
         .where(
-            Voucher.status == "posted",
+            Voucher.status.in_(BOOKED_STATUSES),
             Voucher.period >= start,
             Voucher.period <= end,
             VoucherLine.account_id.in_(ids),
@@ -101,7 +101,7 @@ def _cum_net(db: Session, period: str) -> int:
             func.coalesce(func.sum(VoucherLine.debit), 0),
         )
         .join(Voucher, Voucher.id == VoucherLine.voucher_id)
-        .where(Voucher.status == "posted", Voucher.period <= period, VoucherLine.account_id.in_(ids))
+        .where(Voucher.status.in_(BOOKED_STATUSES), Voucher.period <= period, VoucherLine.account_id.in_(ids))
     )
     cr, dr = db.execute(stmt).one()
     return int(cr or 0) - int(dr or 0)

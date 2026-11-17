@@ -13,8 +13,8 @@ import { AppCtx } from '../context'
 
 const STATUS = {
   draft: { label: '未审核', color: 'default' },
-  audited: { label: '已审核', color: 'blue' },
-  posted: { label: '已记账', color: 'green' },
+  audited: { label: '已审核入账', color: 'green' },
+  posted: { label: '已入账（旧）', color: 'green' },
   void: { label: '作废', color: 'red' },
 }
 
@@ -441,9 +441,6 @@ export default function Vouchers() {
             {!closed && r.status === 'draft' ? (
               <a onClick={() => act(r.id, 'audit', '已审核')}>审核</a>
             ) : null}
-            {!closed && r.status === 'audited' ? (
-              <a onClick={() => act(r.id, 'post', '已记账')}>记账</a>
-            ) : null}
             {menu.items.length ? (
               <Dropdown menu={menu} trigger={['click']} placement="bottomRight">
                 <Button type="text" size="small" icon={<MoreOutlined />} />
@@ -471,7 +468,7 @@ export default function Vouchers() {
           <div className="page-title">凭证</div>
           <div className="page-desc">
             {isAll ? '全部期间' : pf === pt ? `会计期间 ${pf}` : `${pf || '最早'} 至 ${pt || '最新'}`}
-            {' · '}审核 → 记账 后进入账簿与报表 · 点行首箭头可展开分录
+            {' · '}审核后即进入账簿与报表 · 点行首箭头可展开分录
           </div>
         </div>
         <Space>

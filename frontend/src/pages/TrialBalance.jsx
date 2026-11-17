@@ -64,12 +64,12 @@ export default function TrialBalance() {
         </a>
       ),
     },
-    { title: '期初借方', dataIndex: 'open_dr', width: 120, className: 'num', render: (v) => (v ? fmt(v) : '') },
-    { title: '期初贷方', dataIndex: 'open_cr', width: 120, className: 'num', render: (v) => (v ? fmt(v) : '') },
-    { title: '本期借方', dataIndex: 'cur_dr', width: 120, className: 'num', render: (v) => (v ? fmt(v) : '') },
-    { title: '本期贷方', dataIndex: 'cur_cr', width: 120, className: 'num', render: (v) => (v ? fmt(v) : '') },
-    { title: '期末借方', dataIndex: 'close_dr', width: 120, className: 'num', render: (v) => (v ? fmt(v) : '') },
-    { title: '期末贷方', dataIndex: 'close_cr', width: 120, className: 'num', render: (v) => (v ? fmt(v) : '') },
+    { title: '期初借方', dataIndex: 'open_dr', width: 120, className: 'num', align: 'right', render: (v) => (v ? fmt(v) : '') },
+    { title: '期初贷方', dataIndex: 'open_cr', width: 120, className: 'num', align: 'right', render: (v) => (v ? fmt(v) : '') },
+    { title: '本期借方', dataIndex: 'cur_dr', width: 120, className: 'num', align: 'right', render: (v) => (v ? fmt(v) : '') },
+    { title: '本期贷方', dataIndex: 'cur_cr', width: 120, className: 'num', align: 'right', render: (v) => (v ? fmt(v) : '') },
+    { title: '期末借方', dataIndex: 'close_dr', width: 120, className: 'num', align: 'right', render: (v) => (v ? fmt(v) : '') },
+    { title: '期末贷方', dataIndex: 'close_cr', width: 120, className: 'num', align: 'right', render: (v) => (v ? fmt(v) : '') },
   ]
 
   const t = data?.totals || {}
@@ -114,7 +114,7 @@ export default function TrialBalance() {
           pagination={false}
           scroll={{ y: 'calc(100vh - 300px)', x: 980 }}
           summary={() => (
-            <Table.Summary fixed>
+            <Table.Summary>
               <Table.Summary.Row style={{ fontWeight: 600, background: '#fafafa' }}>
                 <Table.Summary.Cell index={0} colSpan={2}>
                   合计

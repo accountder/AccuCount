@@ -13,7 +13,7 @@ from datetime import date
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from .models import Account, AgingBand, Partner, Settle, Voucher, VoucherLine
+from .models import BOOKED_STATUSES, Account, AgingBand, Partner, Settle, Voucher, VoucherLine
 
 # 往来科目 → (档案类型, 是资产类还是负债类)
 PARTNER_ACCOUNTS: dict[str, tuple[str, str]] = {
@@ -55,7 +55,7 @@ def _load_lines(db: Session, period_end: str):
         select(VoucherLine, Voucher, Account)
         .join(Voucher, Voucher.id == VoucherLine.voucher_id)
         .join(Account, Account.id == VoucherLine.account_id)
-        .where(Voucher.status == "posted", Voucher.period <= period_end)
+        .where(Voucher.status.in_(BOOKED_STATUSES), Voucher.period <= period_end)
         .order_by(Voucher.vdate, Voucher.seq, VoucherLine.line_no)
     )
     out = []
@@ -372,7 +372,7 @@ def unassigned(db: Session, period: str):
         select(VoucherLine, Voucher, Account)
         .join(Voucher, Voucher.id == VoucherLine.voucher_id)
         .join(Account, Account.id == VoucherLine.account_id)
-        .where(Voucher.status == "posted", Voucher.period <= period)
+        .where(Voucher.status.in_(BOOKED_STATUSES), Voucher.period <= period)
         .order_by(Voucher.vdate)
     )
     out, total = [], 0

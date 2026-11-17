@@ -17,8 +17,8 @@ import { AppCtx } from '../context'
 
 const STATUS = {
   draft: { label: '未审核', color: 'default' },
-  audited: { label: '已审核', color: 'blue' },
-  posted: { label: '已记账', color: 'green' },
+  audited: { label: '已审核入账', color: 'green' },
+  posted: { label: '已入账（旧）', color: 'green' },
   void: { label: '作废', color: 'red' },
 }
 
@@ -99,7 +99,7 @@ export default function Dashboard() {
       : [
           !chk.ledger_balanced ? `借贷差额 ${fmt(chk.debit_total - chk.credit_total)} 元` : '',
           !chk.sheet_balanced ? `报表差额 ${fmt(chk.sheet_diff)} 元` : '',
-          chk.unposted_count ? `${chk.unposted_count} 张凭证尚未记账` : '',
+          chk.unposted_count ? `${chk.unposted_count} 张凭证尚未审核` : '',
         ].filter(Boolean).join('；')
 
   return (
@@ -194,9 +194,9 @@ export default function Dashboard() {
           </div>
 
           <div className="voucher-count-row">
-            <span className="count-pill">未审核 <b>{st.draft ?? 0}</b></span>
-            <span className="count-pill">已审核 <b>{st.audited ?? 0}</b></span>
-            <span className="count-pill">已记账 <b>{st.posted ?? 0}</b></span>
+            <span className="count-pill">待审核 <b>{st.draft ?? 0}</b></span>
+            <span className="count-pill">已入账 <b>{st.booked ?? st.audited ?? 0}</b></span>
+            <span className="count-pill">作废 <b>{st.void ?? 0}</b></span>
           </div>
 
           <div className="quick-actions">

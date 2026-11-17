@@ -154,7 +154,7 @@ function SideNav({ menuItems, selected, collapsed = false, onNavigate, onClose }
       {!collapsed ? (
         <div className="side-footer">
           <span>小企业会计准则</span>
-          <span>v0.2.1</span>
+          <span>v0.2.2</span>
         </div>
       ) : null}
     </div>

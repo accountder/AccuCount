@@ -2,8 +2,8 @@
 
 设计要点：
 - 科目为树形，用 code 点号分层（1002 / 1002.01）；只有叶子科目能做分录。
-- 凭证状态机：draft（未审核）→ audited（已审核）→ posted（已记账）；void 作废。
-  余额与报表只统计 posted。
+- 凭证状态机：draft（未审核）→ audited（已审核）→ posted（旧版已记账，兼容保留）；void 作废。
+  余额与报表统计 audited 和 posted，审核即入账。
 - 金额字段均为整数「分」。
 """
 from datetime import datetime, date
@@ -23,6 +23,9 @@ from sqlalchemy import (
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from .db import Base
+
+# 已入账状态：正常流程到 audited 即进入账簿；posted 仅兼容旧版数据。
+BOOKED_STATUSES = ("audited", "posted")
 
 
 class Company(Base):

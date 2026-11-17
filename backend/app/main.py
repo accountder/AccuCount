@@ -27,7 +27,7 @@ async def lifespan(app: FastAPI):
     yield
 
 
-app = FastAPI(title="AccuCount 账务系统", version="0.2.1", lifespan=lifespan)
+app = FastAPI(title="AccuCount 账务系统", version="0.2.2", lifespan=lifespan)
 app.include_router(router)
 
 

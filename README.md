@@ -36,10 +36,10 @@ admin / admin123
 
 ```bash
 # Linux / macOS
-ACCUCOUNT_VERSION=0.2.1 docker compose -f docker-compose.release.yml up -d
+ACCUCOUNT_VERSION=0.2.2 docker compose -f docker-compose.release.yml up -d
 
 # Windows PowerShell
-$env:ACCUCOUNT_VERSION="0.2.1"
+$env:ACCUCOUNT_VERSION="0.2.2"
 docker compose -f docker-compose.release.yml up -d
 ```
 
@@ -60,11 +60,11 @@ docker compose -f docker-compose.yml up -d --build
 | 账号与权限 | 管理员 / 会计 / 只读三种角色；支持新增、停用、改角色、重置密码、修改本人密码；角色变更后旧令牌立即失效 |
 | 审计与备份 | 登录与业务操作写入审计日志，管理员可查询；一键下载 SQLite 一致性快照与签名密钥 ZIP |
 | 科目表 | 按《小企业会计准则》预置 66 个一级科目 + 常用明细，共 157 个；支持增删改、停用、点号分层 |
-| 凭证 | 录入 / 修改 / 审核 / 反审核 / 记账 / 作废 / 删除 / **复制** / **插入（凭证号顺移）** / **整理凭证号** / **导出 CSV**；**批量审核、批量复制到指定月份、批量删除**；**按会计期间区间筛选**（起止可选、支持全部期间）；列表可展开看分录（展开状态记忆）、借贷平衡强校验；按月自动编号；人民币大写；行上可选往来单位与税率。**已结账期间自动锁定**，只能查看或复制重做 |
+| 凭证 | 录入 / 修改 / 审核 / 反审核 / 作废 / 删除 / **复制** / **插入（凭证号顺移）** / **整理凭证号** / **导出 CSV**；**批量审核、批量复制到指定月份、批量删除**；**按会计期间区间筛选**（起止可选、支持全部期间）；列表可展开看分录（展开状态记忆）、借贷平衡强校验；按月自动编号；人民币大写；行上可选往来单位与税率；**科目下拉可直接新增客户 / 供应商明细科目并自动建档**；**摘要双击自动填充第一行**。**审核即入账，已结账期间自动锁定**。 |
 | 账簿 | 科目余额表（期初+本期+期末，支持级次，**可导出 xlsx**）、明细账（逐笔余额） |
 | 报表 | 资产负债表（会小企 01 表）、利润表（会小企 02 表），**带行次**（资产 1–30、负债和所有者权益 31–53，右侧在「负债合计」后留 6 行让「所有者权益」与「生产性生物资产」对齐；利润表 1–32），公式驱动，可改模板；**一键导出 xlsx** |
-| 期末 | 结转损益（自动生成凭证）、结账 / 反结账，含前置校验 |
-| 自检 | 借贷发生额平衡、报表平衡、未记账凭证提醒 |
+| 期末 | 一键结账（自动结转损益并锁定期间）、反结账，含前置校验 |
+| 自检 | 借贷发生额平衡、报表平衡、未审核凭证提醒；资产负债表未结转损益时保持不平并自动提示 |
 | **往来** | 客户/供应商档案；挂账-收回台账；FIFO 自动核销；账龄分析（6 档区间可配）；往来对账单（可打印） |
 | **固定资产** | 卡片管理；年限平均法 / 双倍余额递减 / 年数总和；当月增加次月起提；批量计提并生成凭证；处置清理；折旧计划表 |
 | **增值税** | 按税率分档的销项/进项台账；应纳税额与留抵自动计算；申报底稿（主表行次 + 附列资料一/二）；附加税费计提；全年税负表 |
@@ -101,8 +101,8 @@ docker compose -f docker-compose.yml up -d --build
   适合上月漏提折旧、跨期摊销这种「照做一遍」的场景。
 - **反结账**：到期末处理反结账，改完重新结账。适合真的做错了要改原凭证。
 
-**没有「反记账」按钮**是有意的。记账之后再随手反记账，等于账可以随便翻，
-月末对不上就翻回去改——账龄、税务台账、折旧全部跟着漂。要改就走上面两条路。
+**审核即入账，没有单独的「记账」步骤。** 凭证审核通过后立即进入余额表、账簿和财务报表；
+反审核后才会从未入账数据中移除。旧的 `posted` 状态仅用于兼容历史数据。
 
 **插入凭证会顺移凭证号。** 补一张漏记的业务到两张之间（金蝶叫「插入」），
 后面的凭证号整体往后挪一位，保证凭证号顺序与业务日期顺序一致。
@@ -157,8 +157,8 @@ docker compose -f docker-compose.yml up -d --build
 **4. 利润表取「同向发生额」。**
 收入类取贷方发生额、费用类取借方发生额，所以结转损益生成的反向分录不会把报表数字冲掉。
 
-**5. 只有已记账凭证进账。**
-状态机 `draft → audited → posted`，余额、账簿、报表一律只统计 `posted`。
+**5. 已审核凭证即入账。**
+正常状态机为 `draft → audited`，余额、账簿、报表统计 `audited`；旧版 `posted` 继续兼容统计。
 
 ## 四、技术栈
 
@@ -182,13 +182,13 @@ docker compose -f docker-compose.release.yml up -d
 
 ```text
 ghcr.io/accountder/accucount:latest
-ghcr.io/accountder/accucount:0.2.1
+ghcr.io/accountder/accucount:0.2.2
 ```
 
 指定版本时设置 `ACCUCOUNT_VERSION`（Linux/macOS）：
 
 ```bash
-ACCUCOUNT_VERSION=0.2.1 docker compose -f docker-compose.release.yml up -d
+ACCUCOUNT_VERSION=0.2.2 docker compose -f docker-compose.release.yml up -d
 ```
 
 数据保存在当前目录的 `data/` 中。
@@ -262,7 +262,7 @@ docker compose -f docker-compose.yml up -d --build      # 默认映射 8070:8090
 ### DSM（内网）
 
 DSM 专用 Compose 位于 `deploy/dsm/docker-compose.yml`，保留旧版数据目录
-`/volume1/docker/cnerp/data` 并使用容器名 `accucount`、镜像 `accucount:0.2.1`。
+`/volume1/docker/cnerp/data` 并使用容器名 `accucount`、镜像 `accucount:0.2.2`。
 
 升级原则：
 
@@ -290,9 +290,9 @@ python verify_live.py http://192.168.5.189:8070   # 只读核对线上数据
 Kiri Docker 验证流程：
 
 ```bash
-docker --context kiri build -t accucount:0.2.1-test .
+docker --context kiri build -t accucount:0.2.2-test .
 docker --context kiri run -d --rm --name accucount-test \
-  --tmpfs /data:rw,size=64m -p 18093:8090 -e ACCUCOUNT_DATA=/data accucount:0.2.1-test
+  --tmpfs /data:rw,size=64m -p 18093:8090 -e ACCUCOUNT_DATA=/data accucount:0.2.2-test
 docker --context kiri cp backend/test_auth_users_http.py accucount-test:/app/backend/
 docker --context kiri exec accucount-test python test_auth_users_http.py http://127.0.0.1:8090
 ```

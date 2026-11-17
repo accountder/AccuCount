@@ -56,6 +56,7 @@ export const api = {
   accountBalance: (id, period) =>
     http.get(`/accounts/${id}/balance`, { params: { period } }).then((r) => r.data),
   createAccount: (p) => http.post('/accounts', p).then((r) => r.data),
+  createQuickChildAccount: (p) => http.post('/accounts/quick-child', p).then((r) => r.data),
   updateAccount: (id, p) => http.put(`/accounts/${id}`, p).then((r) => r.data),
   deleteAccount: (id) => http.delete(`/accounts/${id}`).then((r) => r.data),
 
