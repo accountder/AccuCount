@@ -1,0 +1,24 @@
+# Runtime data and secrets
+backend/data/
+data/
+.secret
+*.db-wal
+*.db-shm
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+
+# Frontend
+frontend/node_modules/
+frontend/dist/
+*.log
+
+# Temporary QA / deployment artifacts
+.tmp-*
+backend/.tmp-*
+.tmp-browser/
+deploy.tgz
+deploy.b64
