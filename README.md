@@ -7,6 +7,52 @@
 一套自用的业财账务系统：复式记账 → 账簿 → 财务报表，全流程闭环。
 面向一家公司单账套使用，支持管理员 / 会计 / 只读三种角色分工。
 
+## 快速开始
+
+### 直接使用预构建镜像（推荐）
+
+只需安装 Docker，不需要克隆源码，也不需要安装 Node.js 或 Python。
+
+```bash
+curl -LO https://raw.githubusercontent.com/accountder/AccuCount/main/docker-compose.release.yml
+docker compose -f docker-compose.release.yml up -d
+```
+
+打开：
+
+```text
+http://localhost:8070
+```
+
+默认账号：
+
+```text
+admin / admin123
+```
+
+首次登录后请立即修改密码。
+
+### 固定版本
+
+```bash
+# Linux / macOS
+ACCUCOUNT_VERSION=0.2.0 docker compose -f docker-compose.release.yml up -d
+
+# Windows PowerShell
+$env:ACCUCOUNT_VERSION="0.2.0"
+docker compose -f docker-compose.release.yml up -d
+```
+
+镜像包页面：[GHCR - accountder/accucount](https://github.com/accountder/AccuCount/pkgs/container/accucount)
+
+### 从源码构建
+
+```bash
+git clone https://github.com/accountder/AccuCount.git
+cd AccuCount
+docker compose -f docker-compose.yml up -d --build
+```
+
 ## 一、已实现
 
 | 模块 | 内容 |
@@ -125,8 +171,8 @@
 
 ### 方式 A：直接使用预构建镜像（推荐）
 
-无需克隆源码，也不需要安装 Node/Python。只需 Docker，然后下载
-`docker-compose.release.yml`，或在本仓库执行：
+无需克隆源码，也不需要安装 Node.js 或 Python。下载
+`docker-compose.release.yml` 后直接启动：
 
 ```bash
 docker compose -f docker-compose.release.yml up -d
