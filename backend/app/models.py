@@ -126,6 +126,41 @@ class VoucherLine(Base):
     __table_args__ = (Index("ix_line_account", "account_id"),)
 
 
+class OpeningBatch(Base):
+    """账套启用期初余额批次。"""
+
+    __tablename__ = "opening_batch"
+    id: Mapped[int] = mapped_column(primary_key=True)
+    start_period: Mapped[str] = mapped_column(String(7), unique=True, index=True)
+    status: Mapped[str] = mapped_column(String(12), default="draft")  # draft/confirmed
+    note: Mapped[str] = mapped_column(String(200), default="")
+    opening_voucher_id: Mapped[int] = mapped_column(ForeignKey("voucher.id", ondelete="SET NULL"), nullable=True)
+    created_by: Mapped[str] = mapped_column(String(40), default="")
+    confirmed_by: Mapped[str] = mapped_column(String(40), default="")
+    confirmed_at: Mapped[datetime] = mapped_column(DateTime, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.now)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.now, onupdate=datetime.now)
+
+
+class OpeningLine(Base):
+    """期初明细。金额均为分；opening_balance 按科目自然方向保存，可为负数。"""
+
+    __tablename__ = "opening_line"
+    id: Mapped[int] = mapped_column(primary_key=True)
+    batch_id: Mapped[int] = mapped_column(ForeignKey("opening_batch.id", ondelete="CASCADE"), index=True)
+    account_id: Mapped[int] = mapped_column(ForeignKey("account.id"), index=True)
+    aux_type: Mapped[str] = mapped_column(String(20), default="")
+    aux_name: Mapped[str] = mapped_column(String(120), default="")
+    manual_override: Mapped[bool] = mapped_column(Boolean, default=False)
+    opening_balance: Mapped[int] = mapped_column(Integer, default=0)
+    ytd_debit: Mapped[int] = mapped_column(Integer, default=0)
+    ytd_credit: Mapped[int] = mapped_column(Integer, default=0)
+    year_opening: Mapped[int] = mapped_column(Integer, default=0)
+    actual_pl: Mapped[int] = mapped_column(Integer, default=0)
+    remark: Mapped[str] = mapped_column(String(200), default="")
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.now)
+
+
 class User(Base):
     __tablename__ = "user"
     id: Mapped[int] = mapped_column(primary_key=True)
@@ -281,6 +316,64 @@ class VatLedger(Base):
     paid_tax: Mapped[int] = mapped_column(Integer, default=0)  # 实际缴纳（与账面已交税金核对用）
     confirmed: Mapped[bool] = mapped_column(Boolean, default=False)
     confirmed_at: Mapped[datetime] = mapped_column(DateTime, nullable=True)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.now, onupdate=datetime.now)
+
+
+class SurtaxCalc(Base):
+    """附加税测算与确认快照。
+
+    确认时冻结计税依据、减免状态和税率，生成凭证只使用这份快照，
+    避免确认后账簿变化导致凭证金额悄悄改变。
+    """
+
+    __tablename__ = "surtax_calc"
+    id: Mapped[int] = mapped_column(primary_key=True)
+    period: Mapped[str] = mapped_column(String(7), unique=True, index=True)
+    source: Mapped[str] = mapped_column(String(20), default="transfer")
+    source_account_code: Mapped[str] = mapped_column(String(20), default="2221.01.05")
+    base_amount: Mapped[int] = mapped_column(Integer, default=0)
+    small_micro: Mapped[bool] = mapped_column(Boolean, default=False)
+    city_rate: Mapped[int] = mapped_column(Integer, default=700)
+    education_rate: Mapped[int] = mapped_column(Integer, default=300)
+    local_education_rate: Mapped[int] = mapped_column(Integer, default=200)
+    reduction_rate: Mapped[int] = mapped_column(Integer, default=5000)
+    gross_amount: Mapped[int] = mapped_column(Integer, default=0)
+    reduction_amount: Mapped[int] = mapped_column(Integer, default=0)
+    net_amount: Mapped[int] = mapped_column(Integer, default=0)
+    note: Mapped[str] = mapped_column(String(200), default="")
+    confirmed: Mapped[bool] = mapped_column(Boolean, default=False)
+    confirmed_by: Mapped[str] = mapped_column(String(40), default="")
+    confirmed_at: Mapped[datetime] = mapped_column(DateTime, nullable=True)
+    voucher_id: Mapped[int] = mapped_column(ForeignKey("voucher.id", ondelete="SET NULL"), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.now)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.now, onupdate=datetime.now)
+
+
+class IncomeTaxCalc(Base):
+    """季度企业所得税预提测算与确认快照。"""
+
+    __tablename__ = "income_tax_calc"
+    id: Mapped[int] = mapped_column(primary_key=True)
+    period: Mapped[str] = mapped_column(String(7), unique=True, index=True)
+    year: Mapped[int] = mapped_column(Integer, index=True)
+    quarter: Mapped[int] = mapped_column(Integer)
+    ytd_profit: Mapped[int] = mapped_column(Integer, default=0)
+    prior_loss: Mapped[int] = mapped_column(Integer, default=0)
+    taxable_income: Mapped[int] = mapped_column(Integer, default=0)
+    employee_count: Mapped[int] = mapped_column(Integer, default=0)
+    total_assets: Mapped[int] = mapped_column(Integer, default=0)
+    industry_ok: Mapped[bool] = mapped_column(Boolean, default=True)
+    small_micro: Mapped[bool] = mapped_column(Boolean, default=False)
+    effective_rate: Mapped[int] = mapped_column(Integer, default=2500)  # 万分比
+    cumulative_tax: Mapped[int] = mapped_column(Integer, default=0)
+    previous_accrued: Mapped[int] = mapped_column(Integer, default=0)
+    current_accrual: Mapped[int] = mapped_column(Integer, default=0)
+    note: Mapped[str] = mapped_column(String(200), default="")
+    confirmed: Mapped[bool] = mapped_column(Boolean, default=False)
+    confirmed_by: Mapped[str] = mapped_column(String(40), default="")
+    confirmed_at: Mapped[datetime] = mapped_column(DateTime, nullable=True)
+    voucher_id: Mapped[int] = mapped_column(ForeignKey("voucher.id", ondelete="SET NULL"), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.now)
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.now, onupdate=datetime.now)
 
 

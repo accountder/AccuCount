@@ -1,20 +1,37 @@
-# AccuCount 账务系统（小企业会计准则）
+# AccuCount
 
 ![Build and Publish](https://github.com/accountder/AccuCount/actions/workflows/docker-publish.yml/badge.svg)
 
-> 准确入账，清晰经营。面向中国小微企业的轻量财务核算引擎。
+**AccuCount 是一套面向中国小微企业的轻量财务软件，按《小企业会计准则》完成日常记账、账簿查询、财务报表和期末处理。**
 
-一套自用的业财账务系统：复式记账 → 账簿 → 财务报表，全流程闭环。
-面向一家公司单账套使用，支持管理员 / 会计 / 只读三种角色分工。
+系统适合单公司、单账套使用，覆盖从期初建账、凭证录入到期末结账的完整流程，支持管理员、会计和只读账号协作。
 
-## 快速开始
+## 主要功能
 
-### 直接使用预构建镜像（推荐）
+- **凭证管理**：录入、修改、审核、反审核、作废、删除、复制、批量审核和期间查询；支持往来辅助核算、税率、人民币大写和借贷平衡校验。
+- **期初余额**：按资产、负债、所有者权益、成本和损益分类录入；支持客户/供应商明细、负数余额、试算平衡、确认和反确认。
+- **账簿与报表**：科目余额表、明细账、资产负债表和利润表；支持 Excel 导出。
+- **往来管理**：客户/供应商档案、应收应付台账、FIFO 自动核销、账龄分析和往来对账单。
+- **固定资产**：资产卡片、多种折旧方法、批量计提折旧、处置、折旧计划及总账勾稽。
+- **税务处理**：增值税销项/进项台账、应纳税额和留抵计算、附加税费、小型微利企业减半政策、季度企业所得税预提。
+- **期末处理**：结转未交增值税、计提税金和折旧、往来冲销、结转损益、年度结转及期间锁定。
+- **系统管理**：角色权限、操作日志、SQLite 一致性备份、已结账期间保护。
 
-只需安装 Docker，不需要克隆源码，也不需要安装 Node.js 或 Python。
+## 快速部署
+
+### 方式一：使用预构建镜像（推荐）
+
+只需要安装 Docker，不需要克隆源码或安装 Python、Node.js。
 
 ```bash
 curl -LO https://raw.githubusercontent.com/accountder/AccuCount/main/docker-compose.release.yml
+docker compose -f docker-compose.release.yml up -d
+```
+
+Windows PowerShell：
+
+```powershell
+Invoke-WebRequest -Uri "https://raw.githubusercontent.com/accountder/AccuCount/main/docker-compose.release.yml" -OutFile "docker-compose.release.yml"
 docker compose -f docker-compose.release.yml up -d
 ```
 
@@ -32,275 +49,75 @@ admin / admin123
 
 首次登录后请立即修改密码。
 
-### 固定版本
+数据保存在当前目录的 `data/`，升级或重建容器时不会丢失。建议定期备份整个 `data/` 目录，或在系统内下载一致性备份 ZIP。
 
-```bash
-# Linux / macOS
-ACCUCOUNT_VERSION=0.2.2 docker compose -f docker-compose.release.yml up -d
+镜像地址：`ghcr.io/accountder/accucount:latest`，当前发布架构为 `linux/amd64`。
 
-# Windows PowerShell
-$env:ACCUCOUNT_VERSION="0.2.2"
-docker compose -f docker-compose.release.yml up -d
-```
-
-镜像包页面：[GHCR - accountder/accucount](https://github.com/accountder/AccuCount/pkgs/container/accucount)
-
-### 从源码构建
+### 方式二：从源码构建
 
 ```bash
 git clone https://github.com/accountder/AccuCount.git
 cd AccuCount
-docker compose -f docker-compose.yml up -d --build
+docker compose up -d --build
 ```
 
-## 一、已实现
+## 本地开发
 
-| 模块 | 内容 |
-|---|---|
-| 账号与权限 | 管理员 / 会计 / 只读三种角色；支持新增、停用、改角色、重置密码、修改本人密码；角色变更后旧令牌立即失效 |
-| 审计与备份 | 登录与业务操作写入审计日志，管理员可查询；一键下载 SQLite 一致性快照与签名密钥 ZIP |
-| 科目表 | 按《小企业会计准则》预置 66 个一级科目 + 常用明细，共 157 个；支持增删改、停用、点号分层 |
-| 凭证 | 录入 / 修改 / 审核 / 反审核 / 作废 / 删除 / **复制** / **插入（凭证号顺移）** / **整理凭证号** / **导出 CSV**；**批量审核、批量复制到指定月份、批量删除**；**按会计期间区间筛选**（起止可选、支持全部期间）；列表可展开看分录（展开状态记忆）、借贷平衡强校验；按月自动编号；人民币大写；行上可选往来单位与税率；**科目下拉可直接新增客户 / 供应商明细科目并自动建档**；**摘要双击自动填充第一行**。**审核即入账，已结账期间自动锁定**。 |
-| 账簿 | 科目余额表（期初+本期+期末，支持级次，**可导出 xlsx**）、明细账（逐笔余额） |
-| 报表 | 资产负债表（会小企 01 表）、利润表（会小企 02 表），**带行次**（资产 1–30、负债和所有者权益 31–53，右侧在「负债合计」后留 6 行让「所有者权益」与「生产性生物资产」对齐；利润表 1–32），公式驱动，可改模板；**一键导出 xlsx** |
-| 期末 | 一键结账（自动结转损益并锁定期间）、反结账，含前置校验 |
-| 自检 | 借贷发生额平衡、报表平衡、未审核凭证提醒；资产负债表未结转损益时保持不平并自动提示 |
-| **往来** | 客户/供应商档案；挂账-收回台账；FIFO 自动核销；账龄分析（6 档区间可配）；往来对账单（可打印） |
-| **固定资产** | 卡片管理；年限平均法 / 双倍余额递减 / 年数总和；当月增加次月起提；批量计提并生成凭证；处置清理；折旧计划表 |
-| **增值税** | 按税率分档的销项/进项台账；应纳税额与留抵自动计算；申报底稿（主表行次 + 附列资料一/二）；附加税费计提；全年税负表 |
-
-## 二、三块难点的处理
-
-**1. 账龄按「挂账日期」算，不是按记账顺序。**
-每笔形成债权债务的发生额（应收借方、应付贷方）单独记账龄起点，
-核销用 FIFO（先欠先还）把收回的钱冲抵最早的挂账，剩余未核销部分才进账龄。
-这样「11 月开的票、12 月收了一半」显示的是 152,000 挂在 41 天档里，
-而不是按剩余金额重新起算账龄——后者会让老账永远看起来很新，税务一查就是问题。
-
-**2. 折旧的尾差归到最后一期。**
-应计折旧总额 = 原值 − 净残值，逐期算完再归一化，最后一期吸收尾差，
-保证提满 60 期后累计折旧**正好**等于应计总额，不会差几分钱。
-双倍余额递减法按准则要求最后两年改直线。
-
-**3. 留抵靠累计余额判断，不靠手工结转表。**
-本期应纳税额 = 销项 − 实际抵扣，实际抵扣 = min(进项 + 上期留抵 − 进项转出, 销项)。
-期末留抵就是「应抵扣合计 − 实际抵扣」。全部从 2221.01 及其明细的累计发生额推出来，
-上期留抵多少不用人工维护，补录一张凭证下个月的数就自动跟着变。
-刻意排除「转出未交增值税」科目，否则一出现转出凭证，期初留抵就会被算成 0。
-
-## 三、设计要点
-
-**0. 已结账期间是硬锁，不是提示。**
-后端每个写接口（新增、修改、删除、审核、记账、作废、复制）都会跑 `check_period_open`，
-前端只是把结果呈现出来：已结账的行显示「查看 / 复制 / 🔒」，未结账的草稿显示「修改 / 审核 / 删除」。
-新增凭证不会落在已结账月份——日期选择器直接禁掉已结账的日期，
-当前查看的期间若已结账，新凭证自动记到「最近一个未结账期间」（`meta.open_period`）。
-
-跨期想改账只有两条路：
-- **复制**：把原凭证分录原样复制成新期间的草稿（往来单位、税率一并带过去），原凭证不动。
-  适合上月漏提折旧、跨期摊销这种「照做一遍」的场景。
-- **反结账**：到期末处理反结账，改完重新结账。适合真的做错了要改原凭证。
-
-**审核即入账，没有单独的「记账」步骤。** 凭证审核通过后立即进入余额表、账簿和财务报表；
-反审核后才会从未入账数据中移除。旧的 `posted` 状态仅用于兼容历史数据。
-
-**插入凭证会顺移凭证号。** 补一张漏记的业务到两张之间（金蝶叫「插入」），
-后面的凭证号整体往后挪一位，保证凭证号顺序与业务日期顺序一致。
-实现上先把要挪的整批 +100000 再回落到 +1，绕开 `(期间, 字, 号)` 唯一约束在逐行更新时互相撞车。
-
-**删了凭证要「整理凭证号」。** 删中间一张会留断号，审计上「凭证必须连续编号」是要挑毛病的。
-整理按「日期 + 原编号」重排为 1..N；作废凭证仍占号（保留痕迹），只补真正删掉的号。
-已经连续时接口直接返回 unchanged，不会白白重写一遍。
-
-**批量复制是跨期重做的另一条路。** 选一批凭证 → 选目标月份 → 分录原样搬过去（日期保留原来的「日」，
-2 月 30 日这种自动落到月末），全部落成未审核。适合「上个月那 20 张费用凭证这个月还要再做一遍」。
-目标期间必须是未结账的，前端只列 open 的月份，后端也会再校验一次。
-
-**导出是纯前端生成 CSV。** 不装 openpyxl，前端把 `with_lines=1` 拉回来的数据拼成 CSV，
-带 UTF-8 BOM 让 Excel 不乱码。导的是当前筛选条件下的**全部**凭证（不只当前页），一行一条分录。
-
-**1. 金额存整数分。**
-所有金额字段是 `BIGINT` 分，借贷相等用 `==` 严格比较，不存在浮点误差。
-接口层出入自动换算成元。
-
-**2. 报表是公式驱动，不是硬编码。**
-每行定义为一组取数项：
-```json
-{"codes": ["1001", "1002", "1012"], "mode": "end", "sign": 1}
-```
-
-`mode` 有四种：`end` 期末余额、`begin` 年初余额、`period` 本期发生额、`ytd` 本年累计；
-另有 `{"pl": 1}` 表示损益类净额，用于「未分配利润」把未结转的利润并进来。
-合计行用 `refs` 引用其它行，支持正负号。改报表只需改 `report_template` 表里的 JSON，不用改代码。
-
-模板带 `rev` 版本号，结构改了就 +1，启动时自动覆盖库里的旧定义——不用手工改数据，
-也不会覆盖用户自己的账。当前 rev=2，对应「按官方表格补行次」这一版。
-
-**行次照官方表格编排。** 资产负债表左栏 1–30、右栏从 31 续排到 53（不是重新从 1 开始），
-中间 6 个留白行用于让「所有者权益」区块与左栏对齐；利润表 1–32，四个大类分别是
-「一、营业收入 / 二、营业利润 / 三、利润总额 / 四、净利润」。行次写在模板里而不是写死在代码里，
-以后要按别的格式出表，改模板就行。
-
-**年初余额取上年 12 月末，不能跟着行定义走。** 行定义里 `mode` 默认是 `end`，
-如果「年初」那一列照搬，两列会永远相等——这个 bug 一直藏着，直到加了行次逐行核对才发现。
-
-**导出用 openpyxl 生成真 xlsx，不是 CSV 改后缀。** 行次、合计加粗、`#,##0.00` 数字格式、
-列宽、冻结表头都保住了，客户拿到能直接贴进报税底稿。取数复用 `calc`，和页面同一份数据，
-不会出现「页面一个数、导出另一个数」。零值写空单元格，与页面「空白表示无发生额」一致。
-
-**3. 科目前缀聚合，方向按被引用科目判定。**
-取数时先按编码前缀（`2221` 匹配 `2221` 与 `2221.*`）汇总借贷原始发生额，
-再按被引用科目自身的余额方向决定取 `借-贷` 还是 `贷-借`。
-这样 `2221 应交税费` 下同时挂进项税额（借）与销项税额（贷）也能正确轧差，
-**进项大于销项时报表上自然显示为负数（留抵）**，不需要另立应收科目。
-
-**4. 利润表取「同向发生额」。**
-收入类取贷方发生额、费用类取借方发生额，所以结转损益生成的反向分录不会把报表数字冲掉。
-
-**5. 已审核凭证即入账。**
-正常状态机为 `draft → audited`，余额、账簿、报表统计 `audited`；旧版 `posted` 继续兼容统计。
-
-## 四、技术栈
-
-- 后端：FastAPI + SQLAlchemy 2.0 + SQLite（WAL 模式）
-- 前端：React 18 + Ant Design 5 + Vite
-- 部署：单容器，数据落在 `/data` 一个目录
-- 安全：PBKDF2 密码哈希、HMAC 令牌、12 小时有效期、令牌版本失效、集中写权限守卫
-
-## 五、运行方式
-
-### 方式 A：直接使用预构建镜像（推荐）
-
-无需克隆源码，也不需要安装 Node.js 或 Python。下载
-`docker-compose.release.yml` 后直接启动：
+后端：
 
 ```bash
-docker compose -f docker-compose.release.yml up -d
-```
-
-镜像地址：
-
-```text
-ghcr.io/accountder/accucount:latest
-ghcr.io/accountder/accucount:0.2.2
-```
-
-指定版本时设置 `ACCUCOUNT_VERSION`（Linux/macOS）：
-
-```bash
-ACCUCOUNT_VERSION=0.2.2 docker compose -f docker-compose.release.yml up -d
-```
-
-数据保存在当前目录的 `data/` 中。
-
-### 方式 B：从源码构建
-
-```bash
-docker compose -f docker-compose.yml up -d --build
-```
-
-### 本地开发
-
-```bash
-# 后端
 cd backend
 pip install -r requirements.txt
-python run.py                 # http://127.0.0.1:8090
+python run.py
+```
 
-# 前端（开发模式，热更新）
+前端：
+
+```bash
 cd frontend
 npm install
-npm run dev                   # http://127.0.0.1:5173，/api 已代理到 8090
+npm run dev
+```
 
-# 生产构建（构建后由后端直接托管）
+前端开发服务器默认运行在 `http://127.0.0.1:5173`，`/api` 会代理到后端 `8090` 端口。
+
+生产构建：
+
+```bash
+cd frontend
 npm run build
 ```
 
-初始账号 `admin` / `admin123`，首次启动自动建账、建科目表、建期间。
-**首次登录后请立即修改密码**，再到「账号与权限」创建会计或只读账号。
+后端启动后会直接托管 `frontend/dist`。
 
-## 六、自动构建与发布
-
-GitHub Actions 工作流：
-
-```text
-.github/workflows/docker-publish.yml
-```
-
-触发条件：
-
-- 推送到 `main`：发布 `main`、`latest`、`sha-*` 标签
-- 推送 `v*` 标签：发布完整版本、次版本、主版本和 Git 标签
-- 手动运行 `workflow_dispatch`
-
-发布目标：
-
-```text
-ghcr.io/accountder/accucount
-```
-
-构建前会自动运行会计引擎测试和前端生产构建。当前发布镜像目标架构：
-
-- `linux/amd64`
-
-### 从源码部署
-
-```bash
-docker compose -f docker-compose.yml up -d --build      # 默认映射 8070:8090
-```
-
-数据卷 `./data` 挂到容器 `/data`，里面是 `cnerp.db` 与签名密钥 `.secret`。
-数据库文件名保留 `cnerp.db` 是为了兼容 0.1 版已有账套；产品名与容器名已切换为 AccuCount。
-
-- `ACCUCOUNT_DATA`：数据目录，默认 `/data`
-- `ACCUCOUNT_SECRET`：可选，令牌签名密钥；未设置时自动生成 `.secret`
-- `ACCUCOUNT_DB_URL`：可选，自定义 SQLAlchemy 数据库 URL
-
-管理员可在右上角账号菜单直接下载一致性备份 ZIP。日常仍建议保留整个 `data` 目录的定时快照。
-若通过局域网或公网访问，请在容器前增加 HTTPS 反向代理，并限制可访问网段。
-
-### DSM（内网）
-
-DSM 专用 Compose 位于 `deploy/dsm/docker-compose.yml`，保留旧版数据目录
-`/volume1/docker/cnerp/data` 并使用容器名 `accucount`、镜像 `accucount:0.2.2`。
-
-升级原则：
-
-1. 先做在线 SQLite 一致性备份并验证 `PRAGMA integrity_check`；
-2. 保留旧镜像 `cnerp:0.1` 和旧 Compose，便于回滚；
-3. 使用 `docker compose up -d --remove-orphans` 原位替换，不对数据目录做搬迁或删除；
-4. 以容器健康检查、数据库完整性和登录页面三层验证结果为准。
-
-## 七、自测
+## 测试
 
 ```bash
 cd backend
-python test_engine.py     # 引擎级：建 11 张凭证，验证余额、报表、结转
-python test_phase2.py     # 引擎级：往来账龄 / 折旧 / 增值税，42 项断言
-python seed_demo.py       # 接口级：走 HTTP 完整流程（需先启动服务）
-python setup_demo2.py     # 接口级：补往来档案、固定资产、12 月业务（幂等）
-python smoke_api.py       # 接口级：27 个主要接口冒烟
-python test_auth_users_http.py http://127.0.0.1:8090  # 账号权限、审计、备份（需先启动服务）
-python verify_live.py http://192.168.5.189:8070   # 只读核对线上数据
+python test_engine.py
+python test_phase2.py
+python test_calculators.py
+python test_period_closing.py
+python test_income_tax.py
+python test_report_netting.py
+python test_year_end.py
+python test_asset_reconciliation.py
+python test_opening_balance.py
 ```
 
-`test_engine.py` 与 `test_phase2.py` 末尾有断言清单，覆盖资产总计、报表平衡、
-留抵判定、折旧尾差、账龄天数、申报表行次等。
-
-Kiri Docker 验证流程：
+前端构建验证：
 
 ```bash
-docker --context kiri build -t accucount:0.2.2-test .
-docker --context kiri run -d --rm --name accucount-test \
-  --tmpfs /data:rw,size=64m -p 18093:8090 -e ACCUCOUNT_DATA=/data accucount:0.2.2-test
-docker --context kiri cp backend/test_auth_users_http.py accucount-test:/app/backend/
-docker --context kiri exec accucount-test python test_auth_users_http.py http://127.0.0.1:8090
+cd frontend
+npm run build
 ```
 
-## 八、尚未实现（下一阶段）
+## 技术栈
 
-- 现金流量表（需在分录上标记现金流量项目）
-- 存货与生产成本（BOM、工单、制造费用分摊）
-- 工资表与累计预扣法个税
-- 恢复向导（当前已提供一致性备份下载，恢复仍按 `RESTORE.txt` 手工执行）
-- 数电票开具与金税四期直连（受服务商资质限制，不开放）
+- 后端：FastAPI、SQLAlchemy 2.0、SQLite（WAL）
+- 前端：React、Ant Design、Vite
+- 部署：Docker、Docker Compose、GitHub Actions、GHCR
+
+## 使用范围
+
+AccuCount 面向中国境内小微企业的日常财务核算，不替代审计、税务鉴证或金税系统。当前版本未内置现金流量表、工资个税、存货成本核算和数电票直连；正式生产使用前，请根据企业会计政策完成科目、税率和期初期末数据核对。

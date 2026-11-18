@@ -103,6 +103,7 @@ CHART = [
     ("2221.01.07", "　减免税款", "liability", "dr", "", False),
     ("2221.01.08", "　出口退税", "liability", "cr", "", False),
     ("2221.01.09", "　销项税额抵减", "liability", "dr", "", False),
+    ("2221.01.10", "　出口抵减内销产品应纳税额", "liability", "dr", "", False),
     ("2221.02", "应交税费-未交增值税", "liability", "cr", "", False),
     ("2221.03", "应交税费-待认证进项税额", "liability", "dr", "", False),
     ("2221.04", "应交税费-待抵扣进项税额", "liability", "dr", "", False),
@@ -117,6 +118,15 @@ CHART = [
     ("2221.13", "应交税费-应交城镇土地使用税", "liability", "cr", "", False),
     ("2221.14", "应交税费-应交车船税", "liability", "cr", "", False),
     ("2221.15", "应交税费-应交消费税", "liability", "cr", "", False),
+    ("2221.16", "应交税费-预缴增值税", "liability", "dr", "", False),
+    ("2221.17", "应交税费-增值税留抵税额", "liability", "dr", "", False),
+    ("2221.18", "应交税费-简易计税", "liability", "cr", "", False),
+    ("2221.19", "应交税费-转让金融商品应交增值税", "liability", "cr", "", False),
+    ("2221.20", "应交税费-代扣代交增值税", "liability", "cr", "", False),
+    ("2221.21", "应交税费-应交资源税", "liability", "cr", "", False),
+    ("2221.22", "应交税费-应交土地增值税", "liability", "cr", "", False),
+    ("2221.23", "应交税费-应交矿产资源补偿费", "liability", "cr", "", False),
+    ("2221.24", "应交税费-应交环境保护税", "liability", "cr", "", False),
     ("2231", "应付利息", "liability", "cr", "", False),
     ("2232", "应付利润", "liability", "cr", "", False),
     ("2241", "其他应付款", "liability", "cr", "", False),
@@ -159,6 +169,10 @@ CHART = [
     ("5403.05", "税金及附加-房产税", "pl", "dr", "", False),
     ("5403.06", "税金及附加-土地使用税", "pl", "dr", "", False),
     ("5403.07", "税金及附加-车船税", "pl", "dr", "", False),
+    ("5403.08", "税金及附加-资源税", "pl", "dr", "", False),
+    ("5403.09", "税金及附加-土地增值税", "pl", "dr", "", False),
+    ("5403.10", "税金及附加-环境保护税", "pl", "dr", "", False),
+    ("5403.11", "税金及附加-矿产资源补偿费", "pl", "dr", "", False),
     ("5601", "销售费用", "pl", "dr", "", False),
     ("5601.01", "销售费用-职工薪酬", "pl", "dr", "", False),
     ("5601.02", "销售费用-运输费", "pl", "dr", "", False),
@@ -207,7 +221,7 @@ def R(key, label, indent=0, terms=None, refs=None, bold=False, top=False, no=Non
     }
 
 
-TEMPLATE_REV = 5  # 模板版本，改结构时 +1，启动时自动覆盖库里的旧定义
+TEMPLATE_REV = 7  # 模板版本，改结构时 +1，启动时自动覆盖库里的旧定义
 
 
 BALANCE_SHEET = {
@@ -307,12 +321,12 @@ PROFIT = {
         R("P4", "其中：消费税", 1, [], no=4),
         R("P5", "营业税", 1, [], no=5),
         R("P6", "城市维护建设税", 1, [T(["5403.01"], "period")], no=6),
-        R("P7", "资源税", 1, [], no=7),
-        R("P8", "土地增值税", 1, [], no=8),
+        R("P7", "资源税", 1, [T(["5403.08"], "period")], no=7),
+        R("P8", "土地增值税", 1, [T(["5403.09"], "period")], no=8),
         R("P9", "城镇土地使用税、房产税、车船税、印花税", 1,
           [T(["5403.04", "5403.05", "5403.06", "5403.07"], "period")], no=9),
-        R("P10", "教育费附加、矿产资源补偿税、排污费", 1,
-          [T(["5403.02", "5403.03"], "period")], no=10),
+        R("P10", "教育费附加、矿产资源补偿费、环境保护税", 1,
+          [T(["5403.02", "5403.03", "5403.10", "5403.11"], "period")], no=10),
         R("P11", "销售费用", 0, [T(["5601"], "period")], no=11),
         R("P12", "其中：商品维修费", 1, [T(["5601.06"], "period")], no=12),
         R("P13", "广告费和业务宣传费", 1, [T(["5601.03"], "period")], no=13),
@@ -351,6 +365,40 @@ def ensure_periods(db: Session, year: int):
             db.add(Period(code=code, year=year, month=m, status="open"))
 
 
+def ensure_chart_accounts(db: Session) -> bool:
+    """幂等补齐默认科目，兼容已建账的旧数据库。
+
+    只添加缺失科目，不覆盖用户改过的名称、状态或辅助核算；新增子科目后
+    同步把父科目设为非末级。返回是否创建了至少一个科目。
+    """
+    existing = {a.code: a for a in db.scalars(select(Account)).all()}
+    added = False
+    for code, name, cat, direction, aux, cash in CHART:
+        if code in existing:
+            continue
+        a = Account(
+            code=code,
+            name=name,
+            cat=cat,
+            direction=direction,
+            level=code.count(".") + 1,
+            aux_types=aux,
+            is_cash=cash,
+        )
+        db.add(a)
+        existing[code] = a
+        added = True
+    db.flush()
+    for code, a in existing.items():
+        if "." not in code:
+            continue
+        parent = existing.get(code.rsplit(".", 1)[0])
+        if parent is not None:
+            a.parent_id = parent.id
+            parent.is_leaf = False
+    return added
+
+
 def seed(db: Session, company_name="财务公司", start_period=None):
     """幂等初始化。返回是否新建了科目表。"""
     created = False
@@ -364,28 +412,7 @@ def seed(db: Session, company_name="财务公司", start_period=None):
         db.add(comp)
         db.flush()
 
-    if db.scalar(select(Account).limit(1)) is None:
-        by_code = {}
-        for code, name, cat, direction, aux, cash in CHART:
-            a = Account(
-                code=code,
-                name=name,
-                cat=cat,
-                direction=direction,
-                level=code.count(".") + 1,
-                aux_types=aux,
-                is_cash=cash,
-            )
-            db.add(a)
-            by_code[code] = a
-        db.flush()
-        for code, a in by_code.items():
-            if "." in code:
-                parent = by_code.get(code.rsplit(".", 1)[0])
-                if parent:
-                    a.parent_id = parent.id
-                    parent.is_leaf = False
-        created = True
+    created = ensure_chart_accounts(db)
 
     # 报表模板带 rev 版本号：结构改了就 +1，启动时自动覆盖库里的旧定义，
     # 不用手工改数据，也不会覆盖用户对「外观」的本地调整（模板本身不含外观）

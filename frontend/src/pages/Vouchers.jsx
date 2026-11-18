@@ -92,6 +92,7 @@ export default function Vouchers() {
   const [q, setQ] = useState('')
   const [pf, setPf] = useState(period)
   const [pt, setPt] = useState(period)
+  const [quickPeriod, setQuickPeriod] = useState(period)
   // 展开分录是用户的浏览偏好，存本地，切页面回来不该被重置
   const [expandAll, setExpandAll] = useState(() => localStorage.getItem(EXPAND_KEY) === '1')
   const [expandedKeys, setExpandedKeys] = useState([])
@@ -132,10 +133,11 @@ export default function Vouchers() {
     }
   }
 
-  // 顶部切换会计期间时，筛选条跟着回到「本期」
+  // 系统当前待结期间变化时，默认回到该单期；不影响用户后续跨期查询
   useEffect(() => {
     setPf(period)
     setPt(period)
+    setQuickPeriod(period)
     setPage(1)
   }, [period])
 
@@ -144,13 +146,25 @@ export default function Vouchers() {
   }, [pf, pt, status, page, expandAll])
 
   const pickPeriod = (which, v) => {
+    let nextFrom = pf
+    let nextTo = pt
     if (which === 'from') {
-      setPf(v)
-      if (v && pt && v > pt) setPt(v)
+      nextFrom = v
+      if (v && pt && v > pt) nextTo = v
     } else {
-      setPt(v)
-      if (v && pf && v < pf) setPf(v)
+      nextTo = v
+      if (v && pf && v < pf) nextFrom = v
     }
+    setPf(nextFrom)
+    setPt(nextTo)
+    setQuickPeriod(nextFrom && nextTo && nextFrom === nextTo ? nextFrom : null)
+    setPage(1)
+  }
+
+  const pickQuickPeriod = (v) => {
+    setQuickPeriod(v || null)
+    setPf(v || null)
+    setPt(v || null)
     setPage(1)
   }
 
@@ -396,16 +410,16 @@ export default function Vouchers() {
         ),
     },
     {
-      title: '凭证字号',
+      title: '凭证字号 / 状态',
       dataIndex: 'no',
-      width: 90,
+      width: 138,
       render: (v, r) => (
-        <span style={{ display: 'inline-flex', alignItems: 'center', gap: 4 }}>
+        <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-start', gap: 3 }}>
           <a className="mono-num" onClick={() => nav(`/vouchers/${r.id}`)}>{v}</a>
-          {r.status === 'draft' ? (
-            <span style={{ width: 3, height: 12, background: '#52c41a', borderRadius: 1 }} title="未审核" />
-          ) : null}
-        </span>
+          <Tag color={STATUS[r.status]?.color} style={{ marginInlineEnd: 0, fontSize: 10, lineHeight: '17px' }}>
+            {STATUS[r.status]?.label || r.status}
+          </Tag>
+        </div>
       ),
     },
     {
@@ -416,19 +430,14 @@ export default function Vouchers() {
     {
       title: '金额',
       dataIndex: 'amount',
-      width: 108,
+      width: 110,
       className: 'num',
+      fixed: 'right',
       render: (v) => fmt(v),
     },
     {
-      title: '状态',
-      dataIndex: 'status',
-      width: 74,
-      render: (v) => <Tag color={STATUS[v]?.color}>{STATUS[v]?.label || v}</Tag>,
-    },
-    {
       title: '',
-      width: 142,
+      width: 118,
       fixed: 'right',
       align: 'right',
       render: (_, r) => {
@@ -505,10 +514,18 @@ export default function Vouchers() {
           style={{ width: 136 }}
           size="small"
         />
-        <Button size="small" onClick={() => { setPf(period); setPt(period); setPage(1) }}>
-          本期
-        </Button>
-        <Button size="small" onClick={() => { setPf(null); setPt(null); setPage(1) }}>
+        <span className="lb">快捷查询</span>
+        <Select
+          value={quickPeriod}
+          onChange={pickQuickPeriod}
+          options={periodOptions}
+          placeholder="选择单期"
+          allowClear
+          showSearch
+          style={{ width: 150 }}
+          size="small"
+        />
+        <Button size="small" onClick={() => { setQuickPeriod(null); setPf(null); setPt(null); setPage(1) }}>
           全部
         </Button>
         <span style={{ flex: 1 }} />
@@ -589,7 +606,7 @@ export default function Vouchers() {
           loading={loading}
           columns={visibleColumns}
           dataSource={rows}
-          scroll={{ x: 980 }}
+          scroll={{ x: 760 }}
           rowSelection={readOnly ? undefined : { selectedRowKeys: selected, onChange: setSelected }}
           expandable={{
             expandedRowKeys: allExpanded ? rows.map((r) => r.id) : expandedKeys,

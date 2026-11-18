@@ -3,21 +3,24 @@ import {
   Alert, Button, Card, Col, Form, Input, InputNumber, Row, Space, Statistic,
   Switch, Table, Tabs, Tag, App as AntApp,
 } from 'antd'
-import { FileTextOutlined, ReloadOutlined, SaveOutlined } from '@ant-design/icons'
+import { CalculatorOutlined, ReloadOutlined, SaveOutlined } from '@ant-design/icons'
 import { api, errMsg, fmt } from '../api'
 import { AppCtx } from '../context'
+import PeriodSelect from '../components/PeriodSelect'
+import { useNavigate } from 'react-router-dom'
 
 export default function Vat() {
-  const { period, readOnly } = useContext(AppCtx)
+  const { meta, readOnly } = useContext(AppCtx)
+  const [period, setPeriod] = useState(meta.open_period || meta.periods[0]?.code)
   const [tab, setTab] = useState('book')
   const [book, setBook] = useState(null)
   const [decl, setDecl] = useState(null)
   const [year, setYear] = useState(null)
   const [chk, setChk] = useState(null)
   const [loading, setLoading] = useState(false)
-  const [busy, setBusy] = useState(false)
   const [form] = Form.useForm()
-  const { message, modal } = AntApp.useApp()
+  const { message } = AntApp.useApp()
+  const navigate = useNavigate()
 
   const load = async () => {
     setLoading(true)
@@ -57,40 +60,21 @@ export default function Vat() {
     }
   }
 
-  const doSurtax = () => {
-    modal.confirm({
-      title: `计提 ${period} 附加税费`,
-      content: `以本期应纳增值税 ${fmt(book?.payable)} 元为计税依据，生成城建税、教育费附加、地方教育附加三笔分录。`,
-      onOk: async () => {
-        setBusy(true)
-        try {
-          const r = await api.postSurtax({ period })
-          message.success(`已生成凭证 ${r.voucher_no}，合计 ${fmt(r.total)}`)
-          load()
-        } catch (e) {
-          message.error(errMsg(e))
-        } finally {
-          setBusy(false)
-        }
-      },
-    })
-  }
-
   return (
     <div>
       <div className="page-head">
         <div>
           <div className="page-title">增值税</div>
           <div className="page-desc">
-            {period} · 销项/进项按凭证行税率分档，留抵按 2221.01 累计余额判定
+            {period} · 一般纳税人一般计税口径 · 销项/进项按凭证行税率分档 · 留抵按 2221.01 累计余额判定
           </div>
         </div>
         <Space>
+          <PeriodSelect meta={meta} value={period} onChange={setPeriod} />
           <Button size="small" icon={<ReloadOutlined />} onClick={load} />
           {!readOnly ? (
-            <Button size="small" icon={<FileTextOutlined />} loading={busy} onClick={doSurtax}
-              disabled={!book?.payable}>
-              计提附加税费
+            <Button size="small" icon={<CalculatorOutlined />} onClick={() => navigate('/periods?card=surtax')}>
+              附加税测算
             </Button>
           ) : null}
         </Space>

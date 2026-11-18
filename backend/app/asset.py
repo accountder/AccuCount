@@ -9,6 +9,7 @@
 - 提足后自动停提；停用、已处置的资产不再计提。
 """
 from datetime import date
+from types import SimpleNamespace
 
 from sqlalchemy import select
 from sqlalchemy.orm import Session
@@ -85,6 +86,16 @@ def schedule(asset: Asset) -> list[int]:
     diff = total - sum(out)
     out[-1] += diff
     return [max(x, 0) for x in out]
+
+
+def schedule_for_values(original_value: int, salvage_rate: int, useful_months: int, method: str) -> list[int]:
+    """不依赖数据库的折旧计划，供测算模块和资产卡片共用。"""
+    return schedule(SimpleNamespace(
+        original_value=int(original_value),
+        salvage_rate=int(salvage_rate),
+        useful_months=max(int(useful_months), 1),
+        method=method,
+    ))
 
 
 def periods_between(start_period: str, period: str) -> int:

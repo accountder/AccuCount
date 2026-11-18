@@ -7,12 +7,15 @@ from fastapi import APIRouter, Body, Depends, HTTPException, Query, Request
 from fastapi.responses import Response
 from pydantic import BaseModel, Field
 from sqlalchemy import func, or_, select, update
+from sqlalchemy.exc import IntegrityError
 
 from . import calc
 from . import asset as asset_engine
 from . import export as xlsx
+from . import income_tax as income_tax_engine
 from . import partner as partner_engine
 from . import vat as vat_engine
+from .opening_utils import build_opening_snapshot, opening_year_opening, selected_opening_lines
 from .backup import create_backup_zip
 from .auth import current_user, hash_password, make_token, require_role, verify_password
 from .db import get_db
@@ -25,16 +28,21 @@ from .models import (
     AuditLog,
     AuxItem,
     Company,
+    IncomeTaxCalc,
+    OpeningBatch,
+    OpeningLine,
     Partner,
     Period,
     ReportTemplate,
     Settle,
+    SurtaxCalc,
     User,
     VatLedger,
     Voucher,
     VoucherLine,
 )
-from .util import from_cents, period_of, to_cents
+from .util import from_cents, period_add, period_of, to_cents
+from .seed import ensure_periods
 
 ROLE_LABEL = {"admin": "管理员", "accountant": "会计", "viewer": "只读"}
 WRITE_METHODS = {"POST", "PUT", "PATCH", "DELETE"}
@@ -905,9 +913,35 @@ def delete_voucher(vid: int, db=Depends(get_db), user=Depends(current_user)):
         raise HTTPException(400, "已审核或已记账凭证不能删除，请先反审核")
     if v.period and db.scalar(select(Period).where(Period.code == v.period, Period.status == "closed")):
         raise HTTPException(400, "期间已结账，不能删除凭证")
+
+    dep_ref = db.scalar(select(AssetDep).where(AssetDep.voucher_id == v.id))
+    if dep_ref is not None:
+        raise HTTPException(400, "该凭证关联折旧明细，不能直接删除；请到固定资产执行撤销本期折旧")
+
+    surtax = db.scalar(select(SurtaxCalc).where(SurtaxCalc.voucher_id == v.id))
+    if surtax is not None:
+        surtax.voucher_id = None
+        surtax.confirmed = False
+        surtax.confirmed_by = ""
+        surtax.confirmed_at = None
+
+    income_tax = db.scalar(select(IncomeTaxCalc).where(IncomeTaxCalc.voucher_id == v.id))
+    if income_tax is not None:
+        income_tax.voucher_id = None
+        income_tax.confirmed = False
+        income_tax.confirmed_by = ""
+        income_tax.confirmed_at = None
+
+    for asset in db.scalars(select(Asset).where(Asset.voucher_id == v.id)).all():
+        asset.voucher_id = None
+
     log(db, user, "voucher.delete", v.id, f"{v.word}-{v.seq:04d}")
     db.delete(v)
-    db.commit()
+    try:
+        db.commit()
+    except IntegrityError:
+        db.rollback()
+        raise HTTPException(409, "凭证仍被其他业务记录引用，请先解除业务关联后再删除")
     return {"ok": True}
 
 
@@ -1028,6 +1062,377 @@ def void_voucher(vid: int, db=Depends(get_db), user=Depends(current_user)):
     log(db, user, "voucher.void", v.id, f"{v.word}-{v.seq:04d}")
     db.commit()
     return voucher_out(db, v)
+
+
+# ------------------------------------------------------------------ 期初余额
+OPENING_CATEGORIES = {"asset", "liability", "equity", "cost", "pl"}
+
+
+class OpeningLineIn(BaseModel):
+    account_id: int
+    aux_type: str = ""
+    aux_name: str = ""
+    opening_balance: float = 0
+    ytd_debit: float = 0
+    ytd_credit: float = 0
+    year_opening: float = 0
+    actual_pl: float = 0
+    manual_override: bool = False
+    remark: str = ""
+
+
+class OpeningIn(BaseModel):
+    start_period: str
+    note: str = ""
+    lines: list[OpeningLineIn] = Field(default_factory=list)
+
+
+def _opening_year_opening(account: Account, opening_balance: int,
+                          ytd_debit: int, ytd_credit: int) -> int:
+    return opening_year_opening(account, opening_balance, ytd_debit, ytd_credit)
+
+
+def _opening_rows_and_warnings(db, batch: OpeningBatch | None, start_period: str):
+    accounts = db.scalars(
+        select(Account).where(Account.enabled.is_(True)).order_by(Account.code)
+    ).all()
+    lines = db.scalars(select(OpeningLine).where(OpeningLine.batch_id == batch.id)).all() if batch else []
+    snapshot = build_opening_snapshot(accounts, lines)
+    amounts = snapshot["amounts"]
+    child_totals = snapshot["child_totals"]
+    manual_flags = snapshot["manual_flags"]
+    manual_line_ids = snapshot["manual_line_ids"]
+    lines_by_account = {}
+    for line in lines:
+        lines_by_account.setdefault(line.account_id, []).append(line)
+
+    rows = []
+    for account in accounts:
+        if account.cat not in OPENING_CATEGORIES:
+            continue
+        if account.is_leaf:
+            account_lines = lines_by_account.get(account.id) or [None]
+            for line in account_lines:
+                opening = int(line.opening_balance or 0) if line else 0
+                ytd_dr = int(line.ytd_debit or 0) if line else 0
+                ytd_cr = int(line.ytd_credit or 0) if line else 0
+                rows.append({
+                    "line_id": line.id if line else None,
+                    "account_id": account.id,
+                    "code": account.code,
+                    "name": account.name.strip(),
+                    "cat": account.cat,
+                    "direction": account.direction,
+                    "parent_id": account.parent_id,
+                    "level": account.level,
+                    "is_leaf": True,
+                    "manual_override": False,
+                    "aux_types": account.aux_types,
+                    "aux_type": line.aux_type if line else "",
+                    "aux_name": line.aux_name if line else "",
+                    "opening_balance": from_cents(opening),
+                    "ytd_debit": from_cents(ytd_dr),
+                    "ytd_credit": from_cents(ytd_cr),
+                    "year_opening": from_cents(_opening_year_opening(account, opening, ytd_dr, ytd_cr)),
+                    "actual_pl": from_cents(line.actual_pl) if line else 0,
+                    "remark": line.remark if line else "",
+                    "child_opening_balance": 0,
+                    "child_ytd_debit": 0,
+                    "child_ytd_credit": 0,
+                    "child_year_opening": 0,
+                    "child_actual_pl": 0,
+                    "differences": {field: 0 for field in (
+                        "opening_balance", "ytd_debit", "ytd_credit", "year_opening", "actual_pl"
+                    )},
+                })
+        else:
+            amount = amounts[account.id]
+            child = child_totals.get(account.id)
+            if child is None:
+                child = type(amount)()
+            child_year_opening = _opening_year_opening(
+                account,
+                child.opening_balance,
+                child.ytd_debit,
+                child.ytd_credit,
+            )
+            row = {
+                "line_id": manual_line_ids.get(account.id),
+                "account_id": account.id,
+                "code": account.code,
+                "name": account.name.strip(),
+                "cat": account.cat,
+                "direction": account.direction,
+                "parent_id": account.parent_id,
+                "level": account.level,
+                "is_leaf": False,
+                "manual_override": bool(manual_flags.get(account.id)),
+                "aux_types": "",
+                "aux_type": "",
+                "aux_name": "",
+                "opening_balance": from_cents(amount.opening_balance),
+                "ytd_debit": from_cents(amount.ytd_debit),
+                "ytd_credit": from_cents(amount.ytd_credit),
+                "year_opening": from_cents(amount.year_opening),
+                "actual_pl": from_cents(amount.actual_pl),
+                "remark": "",
+                "child_opening_balance": from_cents(child.opening_balance),
+                "child_ytd_debit": from_cents(child.ytd_debit),
+                "child_ytd_credit": from_cents(child.ytd_credit),
+                "child_year_opening": from_cents(child_year_opening),
+                "child_actual_pl": from_cents(child.actual_pl),
+                "differences": {
+                    "opening_balance": from_cents(amount.opening_balance - child.opening_balance),
+                    "ytd_debit": from_cents(amount.ytd_debit - child.ytd_debit),
+                    "ytd_credit": from_cents(amount.ytd_credit - child.ytd_credit),
+                    "year_opening": from_cents(amount.year_opening - child_year_opening),
+                    "actual_pl": from_cents(amount.actual_pl - child.actual_pl),
+                },
+            }
+            manual_line = next(
+                (line for line in lines_by_account.get(account.id, []) if line.manual_override),
+                None,
+            )
+            row["remark"] = manual_line.remark if manual_line else ""
+            rows.append(row)
+
+    labels = {
+        "opening_balance": "期初余额",
+        "ytd_debit": "本年累计借方",
+        "ytd_credit": "本年累计贷方",
+        "year_opening": "年初余额",
+        "actual_pl": "实际损益发生额",
+    }
+    warnings = []
+    for row in rows:
+        if row["is_leaf"] or not row["manual_override"]:
+            continue
+        differences = {
+            field: value for field, value in row["differences"].items()
+            if abs(float(value or 0)) > 0.000001
+        }
+        if not differences:
+            continue
+        details = "；".join(
+            f"{labels[field]} 手工 {row['opening_balance' if field == 'opening_balance' else field]:,.2f}，"
+            f"下级合计 {row['child_' + field]:,.2f}，差额 {value:,.2f}"
+            for field, value in differences.items()
+        )
+        warnings.append({
+            "account_id": row["account_id"],
+            "code": row["code"],
+            "name": row["name"],
+            "differences": differences,
+            "message": f"{row['code']} {row['name']}：{details}",
+        })
+
+    totals = _opening_totals(db, batch) if batch else {
+        "debit": 0, "credit": 0, "diff": 0, "balanced": True,
+    }
+    totals = {
+        **totals,
+        "debit": from_cents(totals["debit"]),
+        "credit": from_cents(totals["credit"]),
+        "diff": from_cents(totals["diff"]),
+    }
+    return rows, warnings, totals
+
+
+def _opening_totals(db, batch: OpeningBatch):
+    accounts = db.scalars(
+        select(Account).where(Account.enabled.is_(True)).order_by(Account.code)
+    ).all()
+    account_by_id = {account.id: account for account in accounts}
+    lines = db.scalars(select(OpeningLine).where(OpeningLine.batch_id == batch.id)).all()
+    debit = credit = 0
+    for line in selected_opening_lines(accounts, lines):
+        account = account_by_id.get(line.account_id)
+        if account is None or account.cat == "pl":
+            continue
+        amount = int(line.opening_balance or 0)
+        if account.direction == "dr":
+            debit += max(amount, 0)
+            credit += max(-amount, 0)
+        else:
+            credit += max(amount, 0)
+            debit += max(-amount, 0)
+    return {"debit": debit, "credit": credit, "diff": debit - credit, "balanced": debit == credit}
+
+
+def _opening_out(db, batch: OpeningBatch | None, start_period: str):
+    rows, warnings, totals = _opening_rows_and_warnings(db, batch, start_period)
+    return {
+        "batch": ({
+            "id": batch.id, "start_period": batch.start_period, "status": batch.status,
+            "note": batch.note, "opening_voucher_id": batch.opening_voucher_id,
+            "created_by": batch.created_by, "confirmed_by": batch.confirmed_by,
+            "confirmed_at": batch.confirmed_at.isoformat() if batch.confirmed_at else None,
+        } if batch else None),
+        "start_period": batch.start_period if batch else start_period,
+        "rows": rows,
+        "warnings": warnings,
+        "totals": totals,
+    }
+
+
+@router.get("/opening")
+def get_opening(start_period: str | None = None, db=Depends(get_db), user=Depends(current_user)):
+    batch = None
+    if start_period:
+        batch = db.scalar(select(OpeningBatch).where(OpeningBatch.start_period == start_period))
+    if batch is None:
+        batch = db.scalar(select(OpeningBatch).order_by(OpeningBatch.id.desc()).limit(1))
+    company = db.scalar(select(Company).limit(1))
+    fallback = batch.start_period if batch else (company.start_period if company else "2025-01")
+    return _opening_out(db, batch, fallback)
+
+
+@router.post("/opening")
+def save_opening(body: OpeningIn, db=Depends(get_db), user=Depends(current_user)):
+    batch = db.scalar(select(OpeningBatch).where(OpeningBatch.start_period == body.start_period))
+    if batch and batch.status == "confirmed":
+        raise HTTPException(400, "期初已确认，请先反确认再修改")
+    if batch is None:
+        batch = OpeningBatch(start_period=body.start_period, created_by=user["username"])
+        db.add(batch)
+        db.flush()
+    batch.note = body.note[:200]
+    db.query(OpeningLine).filter(OpeningLine.batch_id == batch.id).delete()
+    seen_manual_parents = set()
+    for line in body.lines:
+        account = db.get(Account, line.account_id)
+        if not account or not account.enabled or account.cat not in OPENING_CATEGORIES:
+            raise HTTPException(400, "期初只能录入启用的会计科目")
+        manual_override = bool(line.manual_override)
+        if not account.is_leaf:
+            if not manual_override:
+                raise HTTPException(400, f"非末级科目「{account.name}」只能以手工覆盖方式保存")
+            if account.id in seen_manual_parents:
+                raise HTTPException(400, f"上级科目「{account.name}」只能保存一条手工合计")
+            seen_manual_parents.add(account.id)
+        opening_balance = to_cents(line.opening_balance)
+        ytd_debit = to_cents(line.ytd_debit)
+        ytd_credit = to_cents(line.ytd_credit)
+        actual_pl = to_cents(line.actual_pl)
+        if account.cat == "pl":
+            if opening_balance != 0:
+                raise HTTPException(400, f"损益科目「{account.name}」期初余额必须为0")
+        elif actual_pl != 0:
+            raise HTTPException(400, f"只有损益科目可以录入实际损益发生额：{account.name}")
+        year_opening = _opening_year_opening(account, opening_balance, ytd_debit, ytd_credit)
+        db.add(OpeningLine(
+            batch_id=batch.id, account_id=line.account_id,
+            aux_type=(line.aux_type if account.is_leaf else "")[:20],
+            aux_name=(line.aux_name if account.is_leaf else "")[:120],
+            manual_override=manual_override and not account.is_leaf,
+            opening_balance=opening_balance,
+            ytd_debit=ytd_debit, ytd_credit=ytd_credit,
+            year_opening=year_opening, actual_pl=actual_pl,
+            remark=line.remark[:200],
+        ))
+    db.flush()
+    log(db, user, "opening.save", body.start_period, f"{len(body.lines)} 行")
+    db.commit()
+    return _opening_out(db, batch, body.start_period)
+
+
+@router.post("/opening/{batch_id}/confirm")
+def confirm_opening(batch_id: int, db=Depends(get_db), user=Depends(current_user)):
+    batch = db.get(OpeningBatch, batch_id)
+    if not batch:
+        raise HTTPException(404, "期初批次不存在")
+    if batch.status == "confirmed":
+        raise HTTPException(400, "期初已经确认")
+    totals = _opening_totals(db, batch)
+    if not totals["balanced"]:
+        raise HTTPException(400, f"期初借贷不平衡，差额 {from_cents(totals['diff']):,.2f}")
+    start_year = int(batch.start_period[:4])
+    ensure_periods(db, start_year)
+    ensure_periods(db, start_year + 1)
+    db.flush()
+    accounts = db.scalars(
+        select(Account).where(Account.enabled.is_(True)).order_by(Account.code)
+    ).all()
+    account_by_id = {account.id: account for account in accounts}
+    lines = db.scalars(select(OpeningLine).where(OpeningLine.batch_id == batch.id)).all()
+    voucher_lines = []
+    # 手工父科目优先，并自动跳过其下级，避免父级与明细重复进入期初凭证。
+    for line in selected_opening_lines(accounts, lines):
+        if not line.opening_balance:
+            continue
+        account = account_by_id.get(line.account_id)
+        if account is None or account.cat == "pl":
+            continue
+        if account.direction == "dr":
+            debit, credit = line.opening_balance, 0
+        else:
+            debit, credit = 0, line.opening_balance
+        voucher_lines.append({
+            "account_id": line.account_id, "debit": debit, "credit": credit,
+            "summary": "期初余额", "aux_type": line.aux_type, "aux_name": line.aux_name,
+        })
+    if not voucher_lines:
+        raise HTTPException(400, "没有可确认的资产负债期初余额")
+    ok, msg = calc.validate_voucher_lines(voucher_lines)
+    if not ok:
+        raise HTTPException(400, msg)
+    prev_period = period_add(batch.start_period, -1)
+    for period in db.scalars(select(Period).where(Period.code < batch.start_period)).all():
+        period.status = "closed"
+        period.closed_at = period.closed_at or datetime.now()
+    period = db.scalar(select(Period).where(Period.code == prev_period))
+    if period is None:
+        y, m = int(prev_period[:4]), int(prev_period[5:7])
+        period = Period(code=prev_period, year=y, month=m, status="closed")
+        db.add(period)
+    else:
+        period.status = "closed"
+        period.closed_at = datetime.now()
+    py, pm = int(prev_period[:4]), int(prev_period[5:7])
+    v = Voucher(
+        period=prev_period, vdate=date(py, pm, calendar.monthrange(py, pm)[1]), word="记",
+        seq=_next_seq(db, prev_period, "记"), note=f"{batch.start_period} 期初余额",
+        maker=user["username"], auditor=user["username"], status="audited", source="opening",
+    )
+    db.add(v)
+    db.flush()
+    for i, line in enumerate(voucher_lines, 1):
+        db.add(VoucherLine(voucher_id=v.id, line_no=i, summary=line["summary"],
+                           account_id=line["account_id"], debit=line["debit"], credit=line["credit"],
+                           aux_type=line["aux_type"], aux_name=line["aux_name"]))
+    batch.status = "confirmed"
+    batch.confirmed_by = user["username"]
+    batch.confirmed_at = datetime.now()
+    batch.opening_voucher_id = v.id
+    company = db.scalar(select(Company).limit(1))
+    if company is not None:
+        company.start_period = batch.start_period
+    log(db, user, "opening.confirm", batch.start_period, f"{len(voucher_lines)} 行")
+    db.commit()
+    return {"ok": True, "voucher_no": f"{v.word}-{v.seq:04d}", **_opening_out(db, batch, batch.start_period)}
+
+
+@router.post("/opening/{batch_id}/unconfirm")
+def unconfirm_opening(batch_id: int, db=Depends(get_db), user=Depends(current_user)):
+    batch = db.get(OpeningBatch, batch_id)
+    if not batch or batch.status != "confirmed":
+        raise HTTPException(400, "期初未确认")
+    used = db.scalar(select(func.count()).select_from(Voucher).where(
+        Voucher.period >= batch.start_period, Voucher.source != "opening", Voucher.status != "void"
+    )) or 0
+    if used:
+        raise HTTPException(400, "启用期间已有业务凭证，不能直接反确认期初")
+    if batch.opening_voucher_id:
+        v = db.get(Voucher, batch.opening_voucher_id)
+        if v:
+            db.delete(v)
+    batch.status = "draft"
+    batch.opening_voucher_id = None
+    batch.confirmed_by = ""
+    batch.confirmed_at = None
+    log(db, user, "opening.unconfirm", batch.start_period)
+    db.commit()
+    return {"ok": True}
 
 
 # ------------------------------------------------------------------ 报表
@@ -1198,6 +1603,435 @@ def list_periods(db=Depends(get_db), user=Depends(current_user)):
     return out
 
 
+def _current_open_period(db) -> str | None:
+    periods = db.scalars(select(Period).order_by(Period.code)).all()
+    opens = [p.code for p in periods if p.status == "open"]
+    closed = [p.code for p in periods if p.status == "closed"]
+    if not opens:
+        return None
+    if not closed:
+        return opens[0]
+    last_closed = max(closed)
+    candidates = [c for c in opens if c > last_closed]
+    return candidates[0] if candidates else opens[-1]
+
+
+def _asset_reconciliation(db, period: str) -> dict:
+    book = calc.Book(db, period)
+    gl_original = book.sum_codes("end", ["1601"])
+    gl_accum = book.sum_codes("end", ["1602"])
+    assets = db.scalars(select(Asset).where(Asset.status != "disposed")).all()
+    card_original = sum(a.original_value for a in assets)
+    card_accum = sum(a.accum_dep for a in assets)
+    original_diff = card_original - gl_original
+    accum_diff = card_accum - gl_accum
+    return {
+        "ok": original_diff == 0 and accum_diff == 0,
+        "card_original": from_cents(card_original),
+        "gl_original": from_cents(gl_original),
+        "original_diff": from_cents(original_diff),
+        "card_accum": from_cents(card_accum),
+        "gl_accum": from_cents(gl_accum),
+        "accum_diff": from_cents(accum_diff),
+    }
+
+
+def _voucher_for_source(db, period: str, source: str) -> Voucher | None:
+    return db.scalar(
+        select(Voucher).where(
+            Voucher.period == period,
+            Voucher.source == source,
+            Voucher.status != "void",
+        ).order_by(Voucher.id.desc())
+    )
+
+
+def _voucher_amount(v: Voucher | None) -> int:
+    if not v:
+        return 0
+    return sum(line.debit for line in v.lines)
+
+
+def _voucher_card(v: Voucher | None, amount: int, *, can_generate: bool = False,
+                  blocker: str = "", action: str = "generate") -> dict:
+    if v:
+        status = v.status
+        label = {"draft": "待审核", "audited": "已审核", "posted": "已入账", "void": "已作废"}.get(status, status)
+        amount = _voucher_amount(v) or amount
+    else:
+        status = "ready" if can_generate and amount > 0 else "pending"
+        label = "可生成" if status == "ready" else "待处理"
+    return {
+        "amount": from_cents(amount),
+        "status": status,
+        "status_label": label,
+        "can_generate": bool(can_generate and amount > 0 and v is None),
+        "blocker": blocker,
+        "action": action,
+        "voucher": (
+            {
+                "id": v.id,
+                "no": f"{v.word}-{v.seq:04d}",
+                "status": v.status,
+                "source": v.source,
+            }
+            if v else None
+        ),
+    }
+
+
+def _income_tax_result(
+    db,
+    period: str,
+    *,
+    prior_loss: int = 0,
+    employee_count: int = 0,
+    total_assets: int | None = None,
+    industry_ok: bool = True,
+):
+    if total_assets is None:
+        bs = calc.balance_sheet(db, period, get_template(db, "balance_sheet"))
+        total_assets = int(bs["total_assets"])
+    return income_tax_engine.calculate(
+        db, period,
+        prior_loss=prior_loss,
+        employee_count=employee_count,
+        total_assets=total_assets,
+        industry_ok=industry_ok,
+    )
+
+
+def _income_tax_preview_out(db, period: str, result: dict):
+    existing = _voucher_for_source(db, period, "income_tax")
+    saved = db.scalar(select(IncomeTaxCalc).where(IncomeTaxCalc.period == period))
+    out = dict(result)
+    for key in ("ytd_profit", "prior_loss", "taxable_income", "total_assets",
+                "cumulative_tax", "previous_accrued", "previous_snapshot",
+                "previous_book_expense", "previous_diff", "current_accrual"):
+        out[key] = from_cents(out.get(key, 0))
+    out["existing_voucher"] = (
+        {"id": existing.id, "no": f"{existing.word}-{existing.seq:04d}", "status": existing.status}
+        if existing else None
+    )
+    out["saved_confirmed"] = bool(saved and saved.confirmed)
+    out["can_generate"] = bool(
+        saved and saved.confirmed and saved.current_accrual != 0 and not existing
+    )
+    return out
+
+
+@router.get("/periods/{code}/closing-summary")
+def period_closing_summary(code: str, db=Depends(get_db), user=Depends(current_user)):
+    p = db.scalar(select(Period).where(Period.code == code))
+    if not p:
+        raise HTTPException(404, "期间不存在")
+    counts = {}
+    for st in ("draft", "audited", "posted", "void"):
+        counts[st] = db.scalar(
+            select(func.count()).select_from(Voucher).where(Voucher.period == code, Voucher.status == st)
+        ) or 0
+    total_vouchers = db.scalar(
+        select(func.count()).select_from(Voucher).where(Voucher.period == code, Voucher.status != "void")
+    ) or 0
+
+    # 结转未交增值税
+    vat_book_data = vat_engine.book(db, code)
+    vat_transfer = _voucher_for_source(db, code, "vat_transfer")
+    vat_transfer_amount = _voucher_amount(vat_transfer) or max(int(vat_book_data["payable"]), 0)
+
+    # 附加税：已确认快照优先，否则展示默认测算值
+    surtax = db.scalar(select(SurtaxCalc).where(SurtaxCalc.period == code))
+    surtax_voucher = _voucher_for_source(db, code, "surtax")
+    if surtax and surtax.confirmed:
+        surtax_amount = surtax.net_amount
+    else:
+        sources = vat_engine.surtax_source_amounts(db, code)
+        chosen = next((x for x in sources if x["available"]), sources[0])
+        surtax_amount = vat_engine.calculate_surtax(chosen["amount"], small_micro=True)["net_total"]
+    surtax_card = _voucher_card(
+        surtax_voucher, surtax_amount,
+        can_generate=bool(surtax and surtax.confirmed),
+        blocker="" if surtax and surtax.confirmed else "请先打开测算并确认附加税",
+        action="surtax",
+    )
+    if surtax_voucher is None and surtax and surtax.confirmed:
+        surtax_card["status"] = "confirmed"
+        surtax_card["status_label"] = "已确认待生成"
+
+    # 季度企业所得税预提
+    income_card = None
+    if income_tax_engine.is_quarter_end(code):
+        income_row = db.scalar(select(IncomeTaxCalc).where(IncomeTaxCalc.period == code))
+        income_voucher = _voucher_for_source(db, code, "income_tax")
+        if income_row and income_row.confirmed:
+            current_accrual = income_row.current_accrual
+            income_result = {
+                "small_micro": income_row.small_micro,
+                "effective_rate": income_row.effective_rate,
+            }
+            income_status = "confirmed"
+            income_label = "应冲回" if current_accrual < 0 else "已确认待生成"
+            income_blocker = ""
+        else:
+            income_result = _income_tax_result(db, code, employee_count=0)
+            current_accrual = int(income_result["current_accrual"])
+            income_status = "pending"
+            income_label = "应冲回" if current_accrual < 0 else ("可计提" if current_accrual > 0 else "无需计提")
+            income_blocker = "请打开测算并确认所得税" if current_accrual != 0 else "累计利润为零或亏损"
+        if income_voucher:
+            income_status = income_voucher.status
+            income_label = {"draft": "待审核", "audited": "已审核", "posted": "已入账"}.get(
+                income_voucher.status, income_voucher.status
+            )
+            current_accrual = _voucher_amount(income_voucher) or current_accrual
+        income_card = {
+            "key": "income_tax",
+            "title": "计提所得税",
+            "settings": True,
+            "amount": from_cents(current_accrual),
+            "status": income_status,
+            "status_label": income_label,
+            "can_generate": bool(income_row and income_row.confirmed and current_accrual != 0 and not income_voucher),
+            "blocker": income_blocker,
+            "action": "income_tax",
+            "voucher": (
+                {"id": income_voucher.id, "no": f"{income_voucher.word}-{income_voucher.seq:04d}",
+                 "status": income_voucher.status, "source": income_voucher.source}
+                if income_voucher else None
+            ),
+            "small_micro": income_result.get("small_micro", False),
+            "effective_rate": income_result.get("effective_rate", 2500),
+        }
+
+    # 折旧
+    dep = asset_engine.preview(db, code)
+    dep_voucher = _voucher_for_source(db, code, "depreciation")
+    dep_card = _voucher_card(
+        dep_voucher, dep["total"] or dep["posted_total"],
+        can_generate=dep["count"] > 0 and not dep["posted_total"],
+        blocker="" if dep["count"] > 0 or dep["posted_total"] else "本期没有可计提折旧的资产",
+        action="depreciation",
+    )
+
+    # 往来冲销
+    partner_ledger = partner_engine.ledger(db, code, only_unsettled=True)
+    settle_amount = abs(int(partner_ledger["total"]["balance"]))
+    settle_card = {
+        "amount": from_cents(settle_amount),
+        "status": "ready" if settle_amount > 0 else "pending",
+        "status_label": "可核销" if settle_amount > 0 else "无需核销",
+        "can_generate": False,
+        "blocker": "",
+        "action": "settle",
+        "voucher": None,
+    }
+
+    # 年度结转：仅12月，把本年利润转入利润分配
+    year_close_card = None
+    if int(code[5:7]) == 12:
+        year_voucher = _voucher_for_source(db, code, "year_close")
+        if year_voucher:
+            year_close_card = {
+                "key": "year_close", "title": "年度结转", "settings": False,
+                **_voucher_card(year_voucher, _voucher_amount(year_voucher), action="year_close"),
+            }
+        else:
+            carry_preview_lines, carry_preview_total = calc.build_carryover(db, code)
+            book_for_year = calc.Book(db, code)
+            year_amount = book_for_year.sum_codes("end", ["3103"]) + (carry_preview_total if carry_preview_lines else 0)
+            year_close_card = {
+                "key": "year_close", "title": "年度结转", "settings": False,
+                "amount": from_cents(year_amount), "status": "ready" if year_amount else "pending",
+                "status_label": "待随结账自动结转" if year_amount else "无需结转",
+                "can_generate": False, "blocker": "", "action": "year_close", "voucher": None,
+            }
+
+    # 结转损益：最终结转到下期时自动完成
+    carry = _voucher_for_source(db, code, "carryover")
+    if carry:
+        carry_amount = _voucher_amount(carry)
+        carry_card = _voucher_card(carry, carry_amount, action="carryover")
+    else:
+        carry_lines, carry_total = calc.build_carryover(db, code)
+        carry_amount = carry_total if carry_lines else 0
+        carry_card = {
+            "amount": from_cents(carry_amount),
+            "status": "ready" if carry_amount else "pending",
+            "status_label": "待随结账自动结转" if carry_amount else "无需结转",
+            "can_generate": False,
+            "blocker": "",
+            "action": "carryover",
+            "voucher": None,
+        }
+
+    cards = [
+        {"key": "vat_transfer", "title": "结转未交增值税", "settings": False,
+         **_voucher_card(vat_transfer, vat_transfer_amount,
+                          can_generate=vat_transfer_amount > 0,
+                          blocker="" if vat_transfer_amount > 0 else "本期无应纳增值税",
+                          action="vat_transfer")},
+        {"key": "surtax", "title": "计提税金", "settings": True, **surtax_card},
+    ]
+    if income_card is not None:
+        cards.append(income_card)
+    cards.extend([
+        {"key": "depreciation", "title": "计提折旧", "settings": True, **dep_card},
+        {"key": "settle", "title": "往来冲销", "settings": False, **settle_card},
+        {"key": "carryover", "title": "结转损益", "settings": False, **carry_card},
+    ])
+    if year_close_card is not None:
+        cards.append(year_close_card)
+    return {
+        "period": code,
+        "period_status": p.status,
+        "current_open_period": _current_open_period(db),
+        "total_vouchers": total_vouchers,
+        "counts": counts,
+        "asset_reconciliation": _asset_reconciliation(db, code),
+        "cards": cards,
+    }
+
+
+@router.post("/periods/{code}/transfer-vat")
+def transfer_vat(code: str, db=Depends(get_db), user=Depends(current_user)):
+    if code != _current_open_period(db):
+        raise HTTPException(400, "只能处理当前待结账期间")
+    check_period_open(db, code)
+    existing = _voucher_for_source(db, code, "vat_transfer")
+    if existing:
+        raise HTTPException(400, "本期已生成过结转未交增值税凭证")
+    b = vat_engine.book(db, code)
+    amount = max(int(b["payable"]), 0)
+    if amount <= 0:
+        raise HTTPException(400, "本期无应纳增值税，无需结转")
+    transfer = db.scalar(select(Account).where(Account.code == "2221.01.05"))
+    unpaid = db.scalar(select(Account).where(Account.code == "2221.02"))
+    if not transfer or not unpaid:
+        raise HTTPException(500, "缺少结转未交增值税科目")
+    lines = [
+        {"account_id": transfer.id, "debit": amount, "credit": 0, "summary": "结转本期未交增值税"},
+        {"account_id": unpaid.id, "debit": 0, "credit": amount, "summary": "结转本期未交增值税"},
+    ]
+    ok, msg = calc.validate_voucher_lines(lines)
+    if not ok:
+        raise HTTPException(400, msg)
+    v = _system_voucher(
+        db, code, date.fromisoformat(code + "-01"),
+        f"结转 {code} 未交增值税", "vat_transfer", user["username"], lines,
+    )
+    log(db, user, "period.transfer_vat", code, f"{from_cents(amount):,.2f}")
+    db.commit()
+    return {"voucher_id": v.id, "voucher_no": f"{v.word}-{v.seq:04d}", "amount": from_cents(amount)}
+
+
+class IncomeTaxConfirmIn(BaseModel):
+    period: str
+    prior_loss: float = 0
+    employee_count: int = 0
+    total_assets: float | None = None
+    industry_ok: bool = True
+    note: str = ""
+
+
+@router.get("/periods/{code}/income-tax/preview")
+def income_tax_preview(
+    code: str,
+    prior_loss: float = 0,
+    employee_count: int = 0,
+    total_assets: float | None = None,
+    industry_ok: bool = True,
+    db=Depends(get_db),
+    user=Depends(current_user),
+):
+    result = _income_tax_result(
+        db, code,
+        prior_loss=to_cents(prior_loss),
+        employee_count=employee_count,
+        total_assets=to_cents(total_assets) if total_assets is not None else None,
+        industry_ok=industry_ok,
+    )
+    return _income_tax_preview_out(db, code, result)
+
+
+@router.post("/periods/{code}/income-tax/confirm")
+def confirm_income_tax(code: str, body: IncomeTaxConfirmIn, db=Depends(get_db), user=Depends(current_user)):
+    if code != _current_open_period(db):
+        raise HTTPException(400, "只能处理当前待结账期间")
+    if not income_tax_engine.is_quarter_end(code):
+        raise HTTPException(400, "所得税只在季度末月份计提")
+    check_period_open(db, code)
+    existing = _voucher_for_source(db, code, "income_tax")
+    if existing:
+        raise HTTPException(400, "本季度已生成企业所得税凭证")
+    result = _income_tax_result(
+        db, code,
+        prior_loss=to_cents(body.prior_loss),
+        employee_count=body.employee_count,
+        total_assets=to_cents(body.total_assets) if body.total_assets is not None else None,
+        industry_ok=body.industry_ok,
+    )
+    if body.employee_count <= 0:
+        raise HTTPException(400, "请填写季度平均从业人数")
+    if result["total_assets"] <= 0:
+        raise HTTPException(400, "请填写季度平均资产总额")
+    if result["current_accrual"] == 0:
+        raise HTTPException(400, "本季度应计提所得税为零，无需生成凭证")
+    row = income_tax_engine.save_snapshot(db, result, user["username"], body.note)
+    log(db, user, "period.income_tax.confirm", code,
+        f"应纳税所得额 {from_cents(row.taxable_income):,.2f}，本季预提 {from_cents(row.current_accrual):,.2f}")
+    db.commit()
+    return _income_tax_preview_out(db, code, result)
+
+
+@router.post("/periods/{code}/income-tax/voucher")
+def create_income_tax_voucher(code: str, db=Depends(get_db), user=Depends(current_user)):
+    if code != _current_open_period(db):
+        raise HTTPException(400, "只能处理当前待结账期间")
+    check_period_open(db, code)
+    existing = _voucher_for_source(db, code, "income_tax")
+    if existing:
+        raise HTTPException(400, "本季度已生成企业所得税凭证")
+    row = db.scalar(select(IncomeTaxCalc).where(IncomeTaxCalc.period == code))
+    if row is None or not row.confirmed:
+        raise HTTPException(400, "请先确认企业所得税测算结果")
+    if row.current_accrual == 0:
+        raise HTTPException(400, "本季度应计提所得税为零，无需生成凭证")
+    expense = db.scalar(select(Account).where(Account.code == "5801"))
+    payable = db.scalar(select(Account).where(Account.code == "2221.06"))
+    if not expense or not payable:
+        raise HTTPException(500, "缺少所得税费用或应交企业所得税科目")
+    amount = abs(row.current_accrual)
+    if row.current_accrual > 0:
+        lines = [
+            {"account_id": expense.id, "debit": amount, "credit": 0, "summary": "预提本季度企业所得税"},
+            {"account_id": payable.id, "debit": 0, "credit": amount, "summary": "预提本季度企业所得税"},
+        ]
+    else:
+        lines = [
+            {"account_id": payable.id, "debit": amount, "credit": 0, "summary": "冲回多提企业所得税"},
+            {"account_id": expense.id, "debit": 0, "credit": amount, "summary": "冲回多提企业所得税"},
+        ]
+    ok, msg = calc.validate_voucher_lines(lines)
+    if not ok:
+        raise HTTPException(400, msg)
+    note = f"预提 {row.year} 年第 {row.quarter} 季度企业所得税"
+    if row.current_accrual < 0:
+        note = f"冲回 {row.year} 年第 {row.quarter} 季度多提企业所得税"
+    v = _system_voucher(db, code, date.fromisoformat(code + "-01"), note,
+                        "income_tax", user["username"], lines)
+    row.voucher_id = v.id
+    log(db, user, "period.income_tax", code,
+        f"应纳税所得额 {from_cents(row.taxable_income):,.2f}，本季预提 {from_cents(row.current_accrual):,.2f}")
+    db.commit()
+    return {
+        "voucher_id": v.id,
+        "voucher_no": f"{v.word}-{v.seq:04d}",
+        "amount": from_cents(row.current_accrual),
+        "small_micro": row.small_micro,
+        "effective_rate": row.effective_rate,
+    }
+
+
 @router.post("/periods/{code}/carryover")
 def carryover(code: str, db=Depends(get_db), user=Depends(current_user)):
     check_period_open(db, code)
@@ -1239,6 +2073,8 @@ def close_period(code: str, db=Depends(get_db), user=Depends(require_role("admin
         raise HTTPException(404, "期间不存在")
     if p.status == "closed":
         raise HTTPException(400, "该期间已结账")
+    if code != _current_open_period(db):
+        raise HTTPException(400, "只能结账当前待处理期间，不能跳过或提前结账")
 
     pending = db.scalar(
         select(func.count()).select_from(Voucher)
@@ -1246,6 +2082,23 @@ def close_period(code: str, db=Depends(get_db), user=Depends(require_role("admin
     ) or 0
     if pending:
         raise HTTPException(400, f"本期还有 {pending} 张未审核凭证，不能结账")
+
+    vat_data = vat_engine.book(db, code)
+    if vat_data["payable"] > 0 and not _voucher_for_source(db, code, "vat_transfer"):
+        raise HTTPException(400, "本期有应纳增值税，请先生成并审核结转未交增值税凭证")
+    if vat_data["payable"] > 0 and not _voucher_for_source(db, code, "surtax"):
+        raise HTTPException(400, "本期有应纳增值税，请先完成并审核计提税金凭证")
+    dep_data = asset_engine.preview(db, code)
+    if dep_data["count"] > 0 and not _voucher_for_source(db, code, "depreciation"):
+        raise HTTPException(400, "本期还有应提折旧，请先生成并审核折旧凭证")
+    if income_tax_engine.is_quarter_end(code) and not _voucher_for_source(db, code, "income_tax"):
+        income_row = db.scalar(select(IncomeTaxCalc).where(IncomeTaxCalc.period == code))
+        income_accrual = income_row.current_accrual if income_row and income_row.confirmed else             _income_tax_result(db, code, employee_count=0)["current_accrual"]
+        if income_accrual != 0:
+            raise HTTPException(400, "本季度还有企业所得税预提未完成，请先测算、确认并审核凭证")
+    asset_check = _asset_reconciliation(db, code)
+    if not asset_check["ok"]:
+        raise HTTPException(400, "固定资产卡片与 1601/1602 总账不一致，请先核对处理")
 
     carry = db.scalar(
         select(Voucher).where(
@@ -1305,6 +2158,39 @@ def close_period(code: str, db=Depends(get_db), user=Depends(require_role("admin
             + ("…" if len(not_carried) > 4 else ""),
         )
 
+    year_close_no = None
+    if int(code[5:7]) == 12:
+        yc = _voucher_for_source(db, code, "year_close")
+        if yc is None:
+            book_year = calc.Book(db, code)
+            year_profit = book_year.sum_codes("end", ["3103"])
+            if year_profit != 0:
+                profit_acc = db.scalar(select(Account).where(Account.code == "3103"))
+                retained_acc = db.scalar(select(Account).where(Account.code == "3104"))
+                if not profit_acc or not retained_acc:
+                    raise HTTPException(500, "缺少本年利润或利润分配科目")
+                amount = abs(year_profit)
+                if year_profit > 0:
+                    lines = [
+                        {"account_id": profit_acc.id, "debit": amount, "credit": 0, "summary": "年度结转本年利润"},
+                        {"account_id": retained_acc.id, "debit": 0, "credit": amount, "summary": "年度结转本年利润"},
+                    ]
+                else:
+                    lines = [
+                        {"account_id": retained_acc.id, "debit": amount, "credit": 0, "summary": "年度结转本年亏损"},
+                        {"account_id": profit_acc.id, "debit": 0, "credit": amount, "summary": "年度结转本年亏损"},
+                    ]
+                yc = _system_voucher(
+                    db, code, date.fromisoformat(code + "-31"),
+                    f"{code[:4]} 年度结转", "year_close", user["username"], lines,
+                )
+                yc.status = "audited"
+                yc.auditor = user["username"]
+            if yc is not None and yc.status == "draft":
+                yc.status = "audited"
+                yc.auditor = user["username"]
+        year_close_no = f"{yc.word}-{yc.seq:04d}" if yc else None
+
     p.status = "closed"
     p.closed_at = datetime.now()
     log(db, user, "period.close", code, f"carryover={carryover_no or '-'}")
@@ -1314,6 +2200,7 @@ def close_period(code: str, db=Depends(get_db), user=Depends(require_role("admin
         "code": code,
         "status": p.status,
         "carryover_no": carryover_no,
+        "year_close_no": year_close_no,
         "profit": profit,
     }
 
@@ -1325,6 +2212,17 @@ def reopen_period(code: str, db=Depends(get_db), user=Depends(require_role("admi
         raise HTTPException(404, "期间不存在")
     if p.status != "closed":
         raise HTTPException(400, "该期间未结账")
+    latest_closed = db.scalar(
+        select(Period.code).where(Period.status == "closed").order_by(Period.code.desc()).limit(1)
+    )
+    if latest_closed and code != latest_closed:
+        raise HTTPException(400, "只能按倒序反结账最近的已结账期间")
+    if int(code[5:7]) == 12:
+        year_close = _voucher_for_source(db, code, "year_close")
+        if year_close and year_close.status != "void":
+            year_close.status = "void"
+            year_close.auditor = ""
+            log(db, user, "period.year_close.void", code, f"{year_close.word}-{year_close.seq:04d}")
     p.status = "open"
     p.closed_at = None
     log(db, user, "period.reopen", code)
@@ -1351,7 +2249,7 @@ def stats(period: str, db=Depends(get_db), user=Depends(current_user)):
     ar = book.sum_codes("end", ["1122"])
     ap = book.sum_codes("end", ["2202"])
     inventory = book.sum_codes("end", ["1401", "1402", "1403", "1405", "1408", "1411"])
-    expense = book.side_amount("period", ["5403", "5601", "5602", "5603"])
+    expense = book.profit_amount("period", ["5403", "5601", "5602", "5603"])
     try:
         vat = vat_engine.book(db, period)
         vat_payable, vat_credit = vat["payable"], vat["closing_credit"]
@@ -1597,6 +2495,17 @@ ASSET_CATEGORIES = ["房屋建筑物", "机器设备", "运输设备", "电子�
 METHOD_LABEL = {"straight": "年限平均法", "ddb": "双倍余额递减法", "syoyds": "年数总和法"}
 
 
+def _validate_asset_method(method: str, useful_months: int) -> None:
+    if method not in METHOD_LABEL:
+        raise HTTPException(400, "折旧方法无效")
+    if useful_months < 1 or useful_months > 1200:
+        raise HTTPException(400, "使用月数必须在 1 到 1200 之间")
+    if method == "syoyds" and useful_months % 12 != 0:
+        raise HTTPException(400, "年数总和法要求使用月数为 12 的整数倍")
+    if method == "ddb" and useful_months < 24:
+        raise HTTPException(400, "双倍余额递减法要求使用年限不少于 24 个月")
+
+
 def asset_out(a: Asset, accs: dict | None = None):
     accs = accs or {}
     def nm(i):
@@ -1684,6 +2593,7 @@ def asset_meta(db=Depends(get_db), user=Depends(current_user)):
 
 @router.post("/assets")
 def create_asset(body: AssetIn, db=Depends(get_db), user=Depends(current_user)):
+    _validate_asset_method(body.method, body.useful_months)
     if db.scalar(select(Asset).where(Asset.name == body.name, Asset.status != "disposed")):
         pass  # 同名资产允许（如同一型号多台），不做唯一校验
     defaults = asset_engine.resolve_accounts(db, body.category)
@@ -1712,6 +2622,7 @@ def create_asset(body: AssetIn, db=Depends(get_db), user=Depends(current_user)):
 
 @router.put("/assets/{aid}")
 def update_asset(aid: int, body: AssetIn, db=Depends(get_db), user=Depends(current_user)):
+    _validate_asset_method(body.method, body.useful_months)
     a = db.get(Asset, aid)
     if not a:
         raise HTTPException(404, "资产不存在")
@@ -1759,6 +2670,73 @@ def depreciation_preview(period: str, db=Depends(get_db), user=Depends(current_u
     r["total"] = from_cents(r["total"])
     r["posted_total"] = from_cents(r["posted_total"])
     return r
+
+
+@router.get("/assets/depreciation/calculate")
+def calculate_depreciation(
+    original_value: float,
+    useful_months: int = 60,
+    salvage_rate: int = 500,
+    method: str = "straight",
+    in_service_date: str = "",
+    dep_start_period: str | None = None,
+    accum_dep: float = 0,
+    current_period: str | None = None,
+    db=Depends(get_db),
+    user=Depends(current_user),
+):
+    """单资产折旧测算，不写资产卡片、不生成凭证。"""
+    _validate_asset_method(method, useful_months)
+    if salvage_rate < 0 or salvage_rate > 10000:
+        raise HTTPException(400, "残值率必须在 0% 到 100% 之间")
+    try:
+        service_date = date.fromisoformat(in_service_date)
+    except ValueError:
+        raise HTTPException(400, "投入使用日期格式无效")
+    start_period = dep_start_period or asset_engine.next_dep_start(service_date)
+    if len(start_period) != 7 or start_period[4] != "-":
+        raise HTTPException(400, "折旧起始期间格式应为 YYYY-MM")
+
+    original = max(to_cents(original_value), 0)
+    accum_in = max(to_cents(accum_dep), 0)
+    schedule = asset_engine.schedule_for_values(original, salvage_rate, useful_months, method)
+    salvage = round(original * salvage_rate / 10000)
+    depreciable = max(original - salvage, 0)
+    accum_in = min(accum_in, depreciable)
+    rows, running = [], 0
+    for seq, amount in enumerate(schedule, 1):
+        running += amount
+        rows.append({
+            "seq": seq,
+            "period": period_add_local(start_period, seq - 1),
+            "amount": from_cents(amount),
+            "accum": from_cents(running),
+            "net": from_cents(original - running),
+        })
+    current_amount = 0
+    if current_period and current_period >= start_period:
+        idx = asset_engine.periods_between(start_period, current_period) - 1
+        if 0 <= idx < len(schedule):
+            current_amount = schedule[idx]
+    return {
+        "summary": {
+            "original_value": from_cents(original),
+            "salvage_rate": salvage_rate,
+            "salvage": from_cents(salvage),
+            "depreciable_total": from_cents(depreciable),
+            "useful_months": useful_months,
+            "method": method,
+            "method_label": METHOD_LABEL[method],
+            "in_service_date": service_date.isoformat(),
+            "dep_start_period": start_period,
+            "monthly_dep": from_cents(schedule[0] if schedule else 0),
+            "current_period": current_period or "",
+            "current_period_amount": from_cents(current_amount),
+            "accum_dep": from_cents(accum_in),
+            "net_value": from_cents(original - accum_in),
+        },
+        "rows": rows,
+    }
 
 
 @router.post("/assets/depreciation")
@@ -2022,22 +3000,222 @@ def vat_check(period: str, db=Depends(get_db), user=Depends(current_user)):
     return vat_engine.check(db, period)
 
 
-@router.post("/vat/surtax")
-def post_surtax(period: str, db=Depends(get_db), user=Depends(current_user)):
-    check_period_open(db, period)
-    exists = db.scalar(
+class SurtaxConfirmIn(BaseModel):
+    period: str
+    source: str = "transfer"
+    manual_base: float | None = None
+    small_micro: bool = False
+    city_rate: int = 700
+    education_rate: int = 300
+    local_education_rate: int = 200
+    note: str = ""
+
+
+def _surtax_account_snapshot(
+    db,
+    period: str,
+    source: str = "transfer",
+    manual_base: float | None = None,
+    small_micro: bool = False,
+    city_rate: int = 700,
+    education_rate: int = 300,
+    local_education_rate: int = 200,
+):
+    sources = vat_engine.surtax_source_amounts(db, period)
+    selected = next((x for x in sources if x["value"] == source), None)
+    if manual_base is not None:
+        chosen = {
+            "value": "manual",
+            "label": "手工调整计税依据",
+            "account_code": "",
+            "amount": to_cents(manual_base),
+            "available": True,
+            "description": "按人工核对后的金额计算",
+        }
+    else:
+        if source not in ("transfer", "vat_book", "auto"):
+            raise HTTPException(400, "附加税计税依据来源无效")
+        if source == "auto":
+            chosen = next((x for x in sources if x["available"]), sources[0])
+        else:
+            if selected is None:
+                selected = next((x for x in sources if x["value"] == source), sources[0])
+            chosen = selected
+    if not (0 <= city_rate <= 10000 and 0 <= education_rate <= 10000 and 0 <= local_education_rate <= 10000):
+        raise HTTPException(400, "附加税税率必须在 0% 到 100% 之间")
+    result = vat_engine.calculate_surtax(
+        chosen["amount"],
+        small_micro=small_micro,
+        city_rate=city_rate,
+        education_rate=education_rate,
+        local_education_rate=local_education_rate,
+    )
+    return sources, chosen, result
+
+
+def _surtax_preview_out(db, period: str, sources, chosen, result):
+    existing_voucher = db.scalar(
         select(Voucher).where(Voucher.period == period, Voucher.source == "surtax", Voucher.status != "void")
     )
-    if exists:
+    saved = db.scalar(select(SurtaxCalc).where(SurtaxCalc.period == period))
+    period_row = db.scalar(select(Period).where(Period.code == period))
+    source_rows = []
+    for x in sources:
+        source_rows.append({**x, "amount": from_cents(x["amount"])})
+    items = [{**x, "rate": x["rate"], "gross": from_cents(x["gross"]),
+              "reduction": from_cents(x["reduction"]), "net": from_cents(x["net"])}
+             for x in result["items"]]
+    return {
+        "period": period,
+        "period_status": period_row.status if period_row else "missing",
+        "sources": source_rows,
+        "selected_source": chosen["value"],
+        "selected_source_label": chosen["label"],
+        "selected_account_code": chosen.get("account_code", ""),
+        "base_amount": from_cents(result["base"]),
+        "small_micro": result["small_micro"],
+        "reduction_rate": result["reduction_rate"],
+        "items": items,
+        "gross_total": from_cents(result["gross_total"]),
+        "reduction_total": from_cents(result["reduction_total"]),
+        "net_total": from_cents(result["net_total"]),
+        "existing_voucher": (
+            {"id": existing_voucher.id, "voucher_no": f"{existing_voucher.word}-{existing_voucher.seq:04d}"}
+            if existing_voucher else None
+        ),
+        "saved_confirmed": bool(saved and saved.confirmed),
+        "saved_calc": (
+            {
+                "id": saved.id,
+                "base_amount": from_cents(saved.base_amount),
+                "small_micro": saved.small_micro,
+                "net_amount": from_cents(saved.net_amount),
+                "voucher_id": saved.voucher_id,
+            }
+            if saved else None
+        ),
+        "can_generate": bool(result["net_total"] > 0 and not existing_voucher and period_row and period_row.status == "open"),
+    }
+
+
+@router.get("/vat/surtax/preview")
+def surtax_preview(
+    period: str,
+    source: str = "transfer",
+    manual_base: float | None = None,
+    small_micro: bool = False,
+    city_rate: int = 700,
+    education_rate: int = 300,
+    local_education_rate: int = 200,
+    db=Depends(get_db),
+    user=Depends(current_user),
+):
+    sources, chosen, result = _surtax_account_snapshot(
+        db, period, source, manual_base, small_micro, city_rate, education_rate, local_education_rate
+    )
+    return _surtax_preview_out(db, period, sources, chosen, result)
+
+
+@router.post("/vat/surtax/confirm")
+def confirm_surtax(body: SurtaxConfirmIn, db=Depends(get_db), user=Depends(current_user)):
+    check_period_open(db, body.period)
+    existing = db.scalar(
+        select(Voucher).where(
+            Voucher.period == body.period, Voucher.source == "surtax", Voucher.status != "void"
+        )
+    )
+    if existing:
+        raise HTTPException(400, "本期已生成过附加税费凭证，不能重新确认")
+    sources, chosen, result = _surtax_account_snapshot(
+        db, body.period, body.source, body.manual_base, body.small_micro,
+        body.city_rate, body.education_rate, body.local_education_rate,
+    )
+    if result["base"] <= 0 or result["net_total"] <= 0:
+        raise HTTPException(400, "本期计税依据为零，无需确认附加税")
+    row = db.scalar(select(SurtaxCalc).where(SurtaxCalc.period == body.period))
+    if row is None:
+        row = SurtaxCalc(period=body.period)
+        db.add(row)
+    row.source = chosen["value"]
+    row.source_account_code = chosen.get("account_code", "")
+    row.base_amount = result["base"]
+    row.small_micro = body.small_micro
+    row.city_rate = body.city_rate
+    row.education_rate = body.education_rate
+    row.local_education_rate = body.local_education_rate
+    row.reduction_rate = result["reduction_rate"]
+    row.gross_amount = result["gross_total"]
+    row.reduction_amount = result["reduction_total"]
+    row.net_amount = result["net_total"]
+    row.note = body.note[:200]
+    row.confirmed = True
+    row.confirmed_by = user["username"]
+    row.confirmed_at = datetime.now()
+    row.voucher_id = None
+    log(db, user, "vat.surtax.confirm", body.period,
+        f"计税依据 {from_cents(row.base_amount):,.2f}，实际附加税 {from_cents(row.net_amount):,.2f}")
+    db.commit()
+    return _surtax_preview_out(db, body.period, sources, chosen, result)
+
+
+def _generate_surtax_voucher(db, period: str, user: dict):
+    check_period_open(db, period)
+    existing = db.scalar(
+        select(Voucher).where(Voucher.period == period, Voucher.source == "surtax", Voucher.status != "void")
+    )
+    if existing:
         raise HTTPException(400, "本期已生成过附加税费凭证")
-    lines, total = vat_engine.surtax_voucher_lines(db, period)
-    if not lines:
-        raise HTTPException(400, "本期无应纳增值税，无需计提附加税费")
+    row = db.scalar(select(SurtaxCalc).where(SurtaxCalc.period == period))
+    if row is None or not row.confirmed:
+        raise HTTPException(400, "请先确认附加税测算结果")
+    result = vat_engine.calculate_surtax(
+        row.base_amount,
+        small_micro=row.small_micro,
+        city_rate=row.city_rate,
+        education_rate=row.education_rate,
+        local_education_rate=row.local_education_rate,
+        reduction_rate=row.reduction_rate,
+    )
+    if result["net_total"] != row.net_amount:
+        raise HTTPException(409, "附加税测算快照与当前金额不一致，请重新确认")
+    lines = []
+    for item in result["items"]:
+        if item["net"] <= 0:
+            continue
+        expense = db.scalar(select(Account).where(Account.code == item["expense_code"]))
+        payable = db.scalar(select(Account).where(Account.code == item["account_code"]))
+        if not expense or not payable:
+            raise HTTPException(500, f"缺少附加税科目 {item['expense_code']} / {item['account_code']}")
+        suffix = "（小微减半）" if row.small_micro else ""
+        lines.append({"account_id": expense.id, "debit": item["net"], "credit": 0,
+                      "summary": f"计提{item['name']}{suffix}"})
+        lines.append({"account_id": payable.id, "debit": 0, "credit": item["net"],
+                      "summary": f"计提{item['name']}{suffix}"})
     ok, msg = calc.validate_voucher_lines(lines)
     if not ok:
         raise HTTPException(400, msg)
-    v = _system_voucher(db, period, date.fromisoformat(period + "-01"),
-                        f"计提 {period} 附加税费", "surtax", user["username"], lines)
+    v = _system_voucher(
+        db, period, date.fromisoformat(period + "-01"),
+        f"计提 {period} 附加税费" + ("（小微减半）" if row.small_micro else ""),
+        "surtax", user["username"], lines,
+    )
+    row.voucher_id = v.id
+    log(db, user, "vat.surtax", period,
+        f"法定 {from_cents(row.gross_amount):,.2f}，减免 {from_cents(row.reduction_amount):,.2f}，"
+        f"实际 {from_cents(row.net_amount):,.2f}")
     db.commit()
-    log(db, user, "vat.surtax", period, f"{from_cents(total):,.2f}")
-    return {"voucher_id": v.id, "voucher_no": f"{v.word}-{v.seq:04d}", "total": from_cents(total)}
+    return {"voucher_id": v.id, "voucher_no": f"{v.word}-{v.seq:04d}",
+            "gross_total": from_cents(row.gross_amount),
+            "reduction_total": from_cents(row.reduction_amount),
+            "total": from_cents(row.net_amount)}
+
+
+@router.post("/vat/surtax/voucher")
+def create_surtax_voucher(period: str, db=Depends(get_db), user=Depends(current_user)):
+    return _generate_surtax_voucher(db, period, user)
+
+
+@router.post("/vat/surtax")
+def post_surtax(period: str, db=Depends(get_db), user=Depends(current_user)):
+    """兼容旧入口，但同样要求先完成测算确认。"""
+    return _generate_surtax_voucher(db, period, user)

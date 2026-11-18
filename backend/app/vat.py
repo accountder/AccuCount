@@ -288,6 +288,98 @@ def check(db: Session, period: str):
     return {"period": period, "issues": issues, "balanced": abs(b["diff"]) == 0}
 
 
+SURTAX_ITEMS = (
+    ("2221.08", "城市维护建设税", "5403.01", "city_rate"),
+    ("2221.09", "教育费附加", "5403.02", "education_rate"),
+    ("2221.10", "地方教育附加", "5403.03", "local_education_rate"),
+)
+
+
+def _ratio_amount(base: int, rate: int) -> int:
+    """按万分比计算金额并四舍五入到分（half-up）。"""
+    if base <= 0 or rate <= 0:
+        return 0
+    return (base * rate + 5000) // 10000
+
+
+def surtax_source_amounts(db: Session, period: str) -> list[dict]:
+    """附加税可选的计税依据来源。
+
+    首选 2221.01.05「转出未交增值税」本期借方净额。转出凭证被红冲时
+    贷方会减少净额。没有转出凭证时，再展示按应交增值税台账自动测算结果。
+    """
+    transfer_debit = _sum_side(db, "2221.01.05", period, period, "debit")
+    transfer_credit = _sum_side(db, "2221.01.05", period, period, "credit")
+    transfer = max(transfer_debit - transfer_credit, 0)
+    vat_payable = max(int(book(db, period)["payable"]), 0)
+    return [
+        {
+            "value": "transfer",
+            "label": "2221.01.05 转出未交增值税",
+            "account_code": "2221.01.05",
+            "amount": transfer,
+            "available": transfer > 0,
+            "description": "本期转出未交增值税借方净额",
+        },
+        {
+            "value": "vat_book",
+            "label": "应交增值税自动测算",
+            "account_code": "2221.01",
+            "amount": vat_payable,
+            "available": vat_payable > 0,
+            "description": "按销项、进项、留抵和进项转出计算",
+        },
+    ]
+
+
+def calculate_surtax(
+    base: int,
+    *,
+    small_micro: bool = False,
+    city_rate: int = 700,
+    education_rate: int = 300,
+    local_education_rate: int = 200,
+    reduction_rate: int = 5000,
+) -> dict:
+    """计算城建税、教育费附加和地方教育附加。金额单位均为分。"""
+    base = max(int(base), 0)
+    rates = {
+        "city_rate": max(int(city_rate), 0),
+        "education_rate": max(int(education_rate), 0),
+        "local_education_rate": max(int(local_education_rate), 0),
+    }
+    reduce = min(max(int(reduction_rate), 0), 10000) if small_micro else 0
+    items = []
+    gross_total = reduction_total = net_total = 0
+    for account_code, name, expense_code, rate_key in SURTAX_ITEMS:
+        gross = _ratio_amount(base, rates[rate_key])
+        reduction = _ratio_amount(gross, reduce)
+        net = gross - reduction
+        items.append(
+            {
+                "account_code": account_code,
+                "expense_code": expense_code,
+                "name": name,
+                "rate": rates[rate_key],
+                "gross": gross,
+                "reduction": reduction,
+                "net": net,
+            }
+        )
+        gross_total += gross
+        reduction_total += reduction
+        net_total += net
+    return {
+        "base": base,
+        "small_micro": bool(small_micro),
+        "reduction_rate": reduce,
+        "items": items,
+        "gross_total": gross_total,
+        "reduction_total": reduction_total,
+        "net_total": net_total,
+    }
+
+
 def surtax_voucher_lines(db: Session, period: str) -> list[dict]:
     """生成附加税费计提分录：借 税金及附加-各税种 / 贷 应交税费-各税种。
 

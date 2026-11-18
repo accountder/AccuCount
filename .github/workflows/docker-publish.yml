@@ -44,10 +44,10 @@ jobs:
       - name: Test accounting engine
         working-directory: backend
         run: |
-          export ACCUCOUNT_DATA="$(mktemp -d)"
-          python test_engine.py
-          export ACCUCOUNT_DATA="$(mktemp -d)"
-          python test_phase2.py
+          for test in test_engine.py test_phase2.py test_audit_close.py test_quick_account.py test_calculators.py test_period_closing.py test_income_tax.py test_report_netting.py test_year_end.py test_asset_reconciliation.py test_opening_balance.py; do
+            export ACCUCOUNT_DATA="$(mktemp -d)"
+            python "$test"
+          done
 
       - name: Set up Node.js
         uses: actions/setup-node@v4

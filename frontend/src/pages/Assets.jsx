@@ -9,6 +9,7 @@ import {
 import dayjs from 'dayjs'
 import { api, errMsg, fmt } from '../api'
 import { AppCtx } from '../context'
+import PeriodSelect from '../components/PeriodSelect'
 
 const STATUS = {
   in_use: { color: 'green', text: '在用' },
@@ -19,7 +20,8 @@ const STATUS = {
 const METHOD = { straight: '年限平均法', ddb: '双倍余额递减法', syoyds: '年数总和法' }
 
 export default function Assets() {
-  const { period, meta, readOnly } = useContext(AppCtx)
+  const { meta, readOnly } = useContext(AppCtx)
+  const [period, setPeriod] = useState(meta.open_period || meta.periods[0]?.code)
   const [rows, setRows] = useState([])
   const [summary, setSummary] = useState(null)
   const [preview, setPreview] = useState(null)
@@ -263,6 +265,7 @@ export default function Assets() {
           </div>
         </div>
         <Space>
+          <PeriodSelect meta={meta} value={period} onChange={setPeriod} />
           <Button size="small" icon={<ReloadOutlined />} onClick={load} />
           {!readOnly && preview?.count > 0 && !posted ? (
             <Button size="small" type="primary" icon={<DollarOutlined />} loading={busy} onClick={doPost}>

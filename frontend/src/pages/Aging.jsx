@@ -7,9 +7,11 @@ import { ClearOutlined, PrinterOutlined, ReloadOutlined, ThunderboltOutlined } f
 import dayjs from 'dayjs'
 import { api, errMsg, fmt } from '../api'
 import { AppCtx } from '../context'
+import PeriodSelect from '../components/PeriodSelect'
 
 export default function Aging() {
-  const { period } = useContext(AppCtx)
+  const { meta } = useContext(AppCtx)
+  const [period, setPeriod] = useState(meta.open_period || meta.periods[0]?.code)
   const [tab, setTab] = useState('aging')
   const [ptype, setPtype] = useState('customer')
   const [aging, setAging] = useState(null)
@@ -173,6 +175,7 @@ export default function Aging() {
           </div>
         </div>
         <Space>
+          <PeriodSelect meta={meta} value={period} onChange={setPeriod} />
           <Segmented
             size="small"
             value={ptype}

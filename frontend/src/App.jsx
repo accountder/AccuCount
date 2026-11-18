@@ -10,7 +10,6 @@ import {
   Grid,
   Layout,
   Menu,
-  Select,
   Spin,
   Tag,
 } from 'antd'
@@ -22,6 +21,7 @@ import {
   DashboardOutlined,
   DatabaseOutlined,
   FileTextOutlined,
+  FormOutlined,
   InfoCircleOutlined,
   KeyOutlined,
   LogoutOutlined,
@@ -42,6 +42,7 @@ import ChangePasswordModal from './components/ChangePasswordModal'
 import Login from './pages/Login'
 import Dashboard from './pages/Dashboard'
 import Accounts from './pages/Accounts'
+import OpeningBalances from './pages/OpeningBalances'
 import Vouchers from './pages/Vouchers'
 import VoucherEdit from './pages/VoucherEdit'
 import TrialBalance from './pages/TrialBalance'
@@ -82,6 +83,7 @@ const BASE_MENU = [
     label: '账簿与报表',
     children: [
       { key: '/accounts', icon: <UnorderedListOutlined />, label: '科目表' },
+      { key: '/opening', icon: <FormOutlined />, label: '期初余额' },
       { key: '/reports/tb', icon: <AccountBookOutlined />, label: '科目余额表' },
       { key: '/reports/bs', icon: <BarChartOutlined />, label: '资产负债表' },
       { key: '/reports/pl', icon: <BarChartOutlined />, label: '利润表' },
@@ -176,15 +178,7 @@ function Shell({ meta, reloadMeta, user, onLogout, onUserUpdated }) {
     [user?.role],
   )
 
-  const [period, setPeriod] = useState(() => {
-    const saved = localStorage.getItem('accucount_period') || localStorage.getItem('cnerp_period')
-    if (saved && meta.periods.some((p) => p.code === saved)) return saved
-    return pickDefaultPeriod(meta)
-  })
-
-  useEffect(() => {
-    localStorage.setItem('accucount_period', period)
-  }, [period])
+  const period = meta.open_period || pickDefaultPeriod(meta)
 
   useEffect(() => {
     setDrawerOpen(false)
@@ -200,7 +194,6 @@ function Shell({ meta, reloadMeta, user, onLogout, onUserUpdated }) {
       meta,
       reloadMeta,
       period,
-      setPeriod,
       user,
       readOnly: user?.role === 'viewer',
       onUserUpdated,
@@ -218,7 +211,6 @@ function Shell({ meta, reloadMeta, user, onLogout, onUserUpdated }) {
     return keys.find((key) => loc.pathname.startsWith(key)) || '/'
   }, [loc.pathname, menuItems])
 
-  const cur = meta.periods.find((p) => p.code === period)
   const role = ROLE_TAG[user?.role] || { color: 'default', label: user?.role || '用户' }
 
   const onNavigate = ({ key }) => {
@@ -279,24 +271,6 @@ function Shell({ meta, reloadMeta, user, onLogout, onUserUpdated }) {
             </div>
 
             <div className="header-actions">
-              <div className="period-control">
-                <span>会计期间</span>
-                <Select
-                  value={period}
-                  onChange={setPeriod}
-                  popupMatchSelectWidth={false}
-                  options={meta.periods.map((p) => ({
-                    value: p.code,
-                    label: (
-                      <span className="period-option">
-                        {p.code}
-                        {p.status === 'closed' ? <Tag>已结</Tag> : null}
-                      </span>
-                    ),
-                  }))}
-                />
-              </div>
-              {cur?.status === 'closed' ? <Tag color="orange" className="header-status">本期已结账</Tag> : null}
               <Dropdown
                 placement="bottomRight"
                 menu={{
@@ -339,10 +313,12 @@ function Shell({ meta, reloadMeta, user, onLogout, onUserUpdated }) {
                 <Route path="/vouchers/new" element={user?.role === 'viewer' ? <Navigate to="/vouchers" replace /> : <VoucherEdit />} />
                 <Route path="/vouchers/:id" element={<VoucherEdit />} />
                 <Route path="/accounts" element={<Accounts />} />
+                <Route path="/opening" element={<OpeningBalances />} />
                 <Route path="/partners" element={<Partners />} />
                 <Route path="/aging" element={<Aging />} />
                 <Route path="/assets" element={<Assets />} />
                 <Route path="/vat" element={<Vat />} />
+                <Route path="/calculators" element={<Navigate to="/periods" replace />} />
                 <Route path="/reports/tb" element={<TrialBalance />} />
                 <Route path="/reports/bs" element={<BalanceSheet />} />
                 <Route path="/reports/pl" element={<Profit />} />

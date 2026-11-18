@@ -81,6 +81,11 @@ export const api = {
   carryover: (code) => http.post(`/periods/${code}/carryover`).then((r) => r.data),
   closePeriod: (code) => http.post(`/periods/${code}/close`).then((r) => r.data),
   reopenPeriod: (code) => http.post(`/periods/${code}/reopen`).then((r) => r.data),
+  closingSummary: (code) => http.get(`/periods/${code}/closing-summary`).then((r) => r.data),
+  transferVat: (code) => http.post(`/periods/${code}/transfer-vat`).then((r) => r.data),
+  incomeTaxPreview: (code, params) => http.get(`/periods/${code}/income-tax/preview`, { params }).then((r) => r.data),
+  confirmIncomeTax: (code, body) => http.post(`/periods/${code}/income-tax/confirm`, body).then((r) => r.data),
+  createIncomeTaxVoucher: (code) => http.post(`/periods/${code}/income-tax/voucher`).then((r) => r.data),
 
   // ---- 往来
   partners: (p) => http.get('/partners', { params: p }).then((r) => r.data),
@@ -96,6 +101,12 @@ export const api = {
   agingBands: () => http.get('/aging-bands').then((r) => r.data),
   updateAgingBands: (p) => http.put('/aging-bands', p).then((r) => r.data),
 
+  // ---- 期初余额
+  opening: (start_period) => http.get('/opening', { params: { start_period } }).then((r) => r.data),
+  saveOpening: (body) => http.post('/opening', body).then((r) => r.data),
+  confirmOpening: (id) => http.post(`/opening/${id}/confirm`).then((r) => r.data),
+  unconfirmOpening: (id) => http.post(`/opening/${id}/unconfirm`).then((r) => r.data),
+
   // ---- 固定资产
   assets: (p) => http.get('/assets', { params: p }).then((r) => r.data),
   assetMeta: () => http.get('/assets/meta').then((r) => r.data),
@@ -107,6 +118,7 @@ export const api = {
   postDepreciation: (p) => http.post('/assets/depreciation', null, { params: p }).then((r) => r.data),
   unpostDepreciation: (p) => http.delete('/assets/depreciation', { params: p }).then((r) => r.data),
   assetSchedule: (id) => http.get(`/assets/${id}/schedule`).then((r) => r.data),
+  depreciationCalculate: (params) => http.get('/assets/depreciation/calculate', { params }).then((r) => r.data),
   capitalizeAsset: (id, p) => http.post(`/assets/${id}/capitalize`, p).then((r) => r.data),
   disposeAsset: (id, p) => http.post(`/assets/${id}/dispose`, p).then((r) => r.data),
 
@@ -117,6 +129,9 @@ export const api = {
   vatDeclaration: (p) => http.get('/vat/declaration', { params: p }).then((r) => r.data),
   vatCheck: (p) => http.get('/vat/check', { params: p }).then((r) => r.data),
   postSurtax: (p) => http.post('/vat/surtax', null, { params: p }).then((r) => r.data),
+  surtaxPreview: (params) => http.get('/vat/surtax/preview', { params }).then((r) => r.data),
+  confirmSurtax: (body) => http.post('/vat/surtax/confirm', body).then((r) => r.data),
+  createSurtaxVoucher: (period) => http.post('/vat/surtax/voucher', null, { params: { period } }).then((r) => r.data),
 
   // ---- 导出（返回二进制，由页面触发下载）
   exportBalanceSheet: (p) =>

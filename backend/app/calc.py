@@ -8,12 +8,14 @@ from typing import Iterable
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
-from .models import BOOKED_STATUSES, Account, Voucher, VoucherLine
+from .models import BOOKED_STATUSES, Account, OpeningBatch, OpeningLine, Voucher, VoucherLine
+from .opening_utils import selected_opening_lines
 from .util import period_add
 
 
 # ----------------------------------------------------------------- 基础聚合
-def _posted_sums(db: Session, start: str | None = None, end: str | None = None):
+def _posted_sums(db: Session, start: str | None = None, end: str | None = None,
+                 exclude_sources: tuple[str, ...] = ()):
     """返回 {account_id: (借方合计, 贷方合计)}，只统计已记账凭证。"""
     stmt = (
         select(
@@ -29,6 +31,8 @@ def _posted_sums(db: Session, start: str | None = None, end: str | None = None):
         stmt = stmt.where(Voucher.period >= start)
     if end:
         stmt = stmt.where(Voucher.period <= end)
+    if exclude_sources:
+        stmt = stmt.where(Voucher.source.notin_(exclude_sources))
     return {aid: (int(d), int(c)) for aid, d, c in db.execute(stmt).all()}
 
 
@@ -57,6 +61,7 @@ class Book:
         self.accounts = {a.id: a for a in db.scalars(select(Account)).all()}
         self.by_code = {a.code: a for a in self.accounts.values()}
         self._raw: dict[str, dict[int, tuple[int, int]]] = {}
+        self._pl_raw: dict[str, dict[int, tuple[int, int]]] = {}
 
     def raw(self, mode: str) -> dict[int, tuple[int, int]]:
         if mode in self._raw:
@@ -86,6 +91,37 @@ class Book:
                     c_sum += cr
             acc = self.by_code.get(c)
             total += (d_sum - c_sum) if (acc is None or acc.direction == "dr") else (c_sum - d_sum)
+        return total
+
+    def _pl_data(self, mode: str) -> dict[int, tuple[int, int]]:
+        """损益发生额，排除结转损益凭证，同时保留红字和反向调整。"""
+        if mode in self._pl_raw:
+            return self._pl_raw[mode]
+        if mode == "period":
+            data = _posted_sums(self.db, start=self.period_from, end=self.period,
+                                exclude_sources=("carryover",))
+        elif mode == "ytd":
+            data = _posted_sums(self.db, start=self.year_first, end=self.period,
+                                exclude_sources=("carryover",))
+        else:
+            data = _posted_sums(self.db, end=self.period if mode == "end" else self.prev_dec,
+                                exclude_sources=("carryover",))
+        self._pl_raw[mode] = data
+        return data
+
+    def profit_amount(self, mode: str, codes: Iterable[str]) -> int:
+        """按损益科目余额方向取净发生额：收入贷-借，费用借-贷。"""
+        raw = self._pl_data(mode)
+        total = 0
+        for c in codes:
+            d_sum = c_sum = 0
+            for aid, (d, cr) in raw.items():
+                code = self.accounts[aid].code
+                if code == c or code.startswith(c + "."):
+                    d_sum += d
+                    c_sum += cr
+            acc = self.by_code.get(c)
+            total += (c_sum - d_sum) if (acc is not None and acc.direction == "cr") else (d_sum - c_sum)
         return total
 
     def side_amount(self, mode: str, codes: Iterable[str]) -> int:
@@ -122,6 +158,53 @@ class Book:
                 continue
             total += (c - d) if acc.direction == "cr" else -(d - c)
         return total
+
+
+def _confirmed_opening(db: Session, period: str):
+    return db.scalar(
+        select(OpeningBatch).where(
+            OpeningBatch.status == "confirmed",
+            OpeningBatch.start_period <= period,
+        ).order_by(OpeningBatch.start_period.desc()).limit(1)
+    )
+
+
+def opening_pl_ytd(db: Session, period: str, codes: Iterable[str]) -> int:
+    """年中启用前已实现的损益累计，只用于利润表本年累计。"""
+    batch = _confirmed_opening(db, period)
+    if not batch or batch.start_period[:4] != period[:4]:
+        return 0
+    accounts = db.scalars(select(Account)).all()
+    account_by_id = {account.id: account for account in accounts}
+    lines = db.scalars(select(OpeningLine).where(OpeningLine.batch_id == batch.id)).all()
+    total = 0
+    for line in selected_opening_lines(accounts, lines):
+        account = account_by_id.get(line.account_id)
+        if account is None or account.cat != "pl":
+            continue
+        if not any(account.code == c or account.code.startswith(c + ".") for c in codes):
+            continue
+        total += int(line.actual_pl or 0)
+    return total
+
+
+def opening_year_amount(db: Session, period: str, codes: Iterable[str]) -> int:
+    """年中启用时的年初余额；1月启用由上年12月期初凭证自然取得。"""
+    batch = _confirmed_opening(db, period)
+    if not batch or batch.start_period[:4] != period[:4] or int(batch.start_period[5:7]) == 1:
+        return 0
+    account_list = db.scalars(select(Account)).all()
+    accounts = {a.id: a for a in account_list}
+    lines = db.scalars(select(OpeningLine).where(OpeningLine.batch_id == batch.id)).all()
+    total = 0
+    for line in selected_opening_lines(account_list, lines):
+        account = accounts.get(line.account_id)
+        if account is None or account.cat == "pl":
+            continue
+        if not any(account.code == c or account.code.startswith(c + ".") for c in codes):
+            continue
+        total += int(line.year_opening or 0)
+    return total
 
 
 # ----------------------------------------------------------------- 报表求值
@@ -177,11 +260,10 @@ def balance_sheet(db: Session, period: str, template: dict):
         return book.sum_codes(mode, codes)
 
     def getter_begin(mode, codes):
-        # 年初数一律取上年 12 月末余额，不能用行定义里的 mode
-        # （行里默认写的是 "end"，照搬就会把期末余额当成年初余额，两列永远一样）
+        # 年初数取上年12月末；若年中启用，则加上期初模块中的年初余额快照。
         if codes is None:
             return book.profit("begin")
-        return book.sum_codes("begin", codes)
+        return book.sum_codes("begin", codes) + opening_year_amount(db, period, codes)
 
     left_end, lv_end = _eval_rows(template["left"], getter_end, {})
     left_beg, _ = _eval_rows(template["left"], getter_begin, {})
@@ -231,12 +313,12 @@ def profit_statement(db: Session, period: str, template: dict, period_from: str 
     def getter_period(mode, codes):
         if codes is None:
             return book.profit("period")
-        return book.side_amount(mode, codes)
+        return book.profit_amount(mode, codes)
 
     def getter_ytd(mode, codes):
         if codes is None:
             return book.profit("ytd")
-        return book.side_amount(mode, codes)
+        return book.profit_amount(mode, codes) + opening_pl_ytd(db, period, codes)
 
     rows_p, vp = _eval_rows(template["rows"], getter_period, {})
     rows_y, _ = _eval_rows(template["rows"], getter_ytd, {"period": "ytd"})
@@ -267,8 +349,14 @@ def trial_balance(db: Session, period: str, level: int = 99, only_used: bool = F
     rows = []
     used = defaultdict(int)
     for acc in book.accounts.values():
-        d0, c0 = raw_prev.get(acc.id, (0, 0))
-        d1, c1 = raw_cur.get(acc.id, (0, 0))
+        child_ids = [
+            aid for aid, child in book.accounts.items()
+            if child.code == acc.code or child.code.startswith(acc.code + ".")
+        ]
+        d0 = sum(raw_prev.get(aid, (0, 0))[0] for aid in child_ids)
+        c0 = sum(raw_prev.get(aid, (0, 0))[1] for aid in child_ids)
+        d1 = sum(raw_cur.get(aid, (0, 0))[0] for aid in child_ids)
+        c1 = sum(raw_cur.get(aid, (0, 0))[1] for aid in child_ids)
         if only_used and not (d0 or c0 or d1 or c1):
             continue
         open_net = d0 - c0

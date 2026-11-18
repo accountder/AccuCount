@@ -16,6 +16,7 @@ from .models import AgingBand
 ADD_COLUMNS = [
     ("voucher_line", "tax_rate", "INTEGER DEFAULT 0"),
     ("user", "token_version", "INTEGER DEFAULT 0"),
+    ("opening_line", "manual_override", "BOOLEAN DEFAULT 0"),
 ]
 
 # 账龄区间默认口径（小企业实务常用）
